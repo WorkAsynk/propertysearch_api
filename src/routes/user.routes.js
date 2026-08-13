@@ -15,10 +15,65 @@ const MANAGE_ROLES = ['agency_admin', 'admin', 'super_admin'];
  * tags:
  *   name: Users
  *   description: >
- *     Admin user management (list, view, edit, delete, change role, reset
- *     password). Reachable by agency_admin (own tenant only), admin, and
- *     super_admin. For self-service profile edits, see `PUT /auth/me`.
+ *     Admin user management (create, list, view, edit, delete, change role,
+ *     reset password). Reachable by agency_admin (own tenant only), admin,
+ *     and super_admin. For self-service profile edits, see `PUT /auth/me`.
  */
+
+/**
+ * @swagger
+ * /users:
+ *   post:
+ *     summary: Create a user of any role
+ *     description: >
+ *       Admin-side equivalent of `POST /auth/register`, reusing the same
+ *       role-creation rules: `super_admin` can create any role; `admin` can
+ *       create agency_admin/builder/internal_sales/super_admin;
+ *       `agency_admin` can create customer/broker only (no token restriction
+ *       applies to those two roles). `password` is required for every role
+ *       except customer/broker.
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/RegisterRequest'
+ *     responses:
+ *       201:
+ *         description: User created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean, example: true }
+ *                 message: { type: string, example: User created successfully }
+ *                 data:
+ *                   $ref: '#/components/schemas/RegisteredUser'
+ *       403:
+ *         description: Your role is not permitted to create this target role
+ *       409:
+ *         description: Account already exists with this email/mobile
+ *       422:
+ *         description: Validation failed
+ */
+router.post(
+  '/',
+  authenticate,
+  authorize(...MANAGE_ROLES),
+  [
+    body('fullName').notEmpty().withMessage('Full name is required'),
+    body('email').optional().isEmail().withMessage('Valid email required'),
+    body('mobile').optional().isMobilePhone().withMessage('Valid mobile number required'),
+    body('password').optional().isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
+    body('role').isIn(ALL_ROLES).withMessage(`Role must be one of: ${ALL_ROLES.join(', ')}`),
+  ],
+  validate,
+  userController.createUser
+);
 
 /**
  * @swagger

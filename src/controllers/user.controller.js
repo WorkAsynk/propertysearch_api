@@ -1,5 +1,21 @@
 const userService = require('../services/user.service');
+const authService = require('../services/auth.service');
 const { success } = require('../utils/response');
+
+// POST /api/users - admin-side "create user" for any role, reusing the same
+// role-creation permission checks as public /auth/register (super_admin can
+// create any role; admin can create agency_admin/builder/internal_sales/
+// super_admin; agency_admin cannot create users here - see auth.service's
+// ROLE_CREATION_PERMISSIONS).
+async function createUser(req, res, next) {
+  try {
+    const { fullName, email, mobile, password, role, tenantId } = req.body;
+    const user = await authService.registerUser({ fullName, email, mobile, password, role, tenantId }, req.user);
+    return success(res, 201, 'User created successfully', user);
+  } catch (err) {
+    next(err);
+  }
+}
 
 // GET /api/users
 async function listUsers(req, res, next) {
@@ -84,6 +100,7 @@ async function updateOwnProfile(req, res, next) {
 }
 
 module.exports = {
+  createUser,
   listUsers,
   getUser,
   updateUser,
