@@ -5,6 +5,7 @@ const router = express.Router();
 const authController = require('../controllers/auth.controller');
 const validate = require('../middlewares/validate');
 const { authenticate, authorize, optionalAuthenticate } = require('../middlewares/auth');
+const { uploadProfilePicture } = require('../middlewares/upload');
 
 const ALL_ROLES = ['customer', 'broker', 'agency_admin', 'builder', 'internal_sales', 'admin', 'super_admin'];
 
@@ -389,6 +390,42 @@ router.post(
  *         description: Not authenticated
  */
 router.get('/me', authenticate, authController.getMe);
+
+/**
+ * @swagger
+ * /auth/me/profile-picture:
+ *   post:
+ *     summary: Upload/replace the current user's profile picture
+ *     description: >
+ *       Uploads the file to `users/{userId}/profile/...` in the GCS bucket
+ *       and stores the resulting public URL on the user's row (replacing and
+ *       deleting the previous picture, if any). Postgres stores only the URL.
+ *     tags: [Authentication]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [file]
+ *             properties:
+ *               file: { type: string, format: binary }
+ *     responses:
+ *       200:
+ *         description: Profile picture updated successfully
+ *       400:
+ *         description: Missing/oversized/unsupported file
+ *       401:
+ *         description: Not authenticated
+ */
+router.post(
+  '/me/profile-picture',
+  authenticate,
+  uploadProfilePicture.single('file'),
+  authController.uploadProfilePicture
+);
 
 /**
  * @swagger

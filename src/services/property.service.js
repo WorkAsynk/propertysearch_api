@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const { isAdmin } = require('../utils/ownership');
+const { uploadBuffer, deleteByUrl } = require('../utils/storage');
 
 function notFound(message = 'Property not found') {
   const err = new Error(message);
@@ -218,12 +219,28 @@ async function addMedia(propertyId, mediaItems) {
   return inserted;
 }
 
+// Uploads a single file straight to GCS (properties/<id>/images|videos/...)
+// and records the resulting public URL in property_media.
+async function uploadMedia(propertyId, file, options = {}) {
+  const mediaType = file.mimetype.startsWith('video/') ? 'video' : 'image';
+  const folder = `properties/${propertyId}/${mediaType === 'video' ? 'videos' : 'images'}`;
+  const url = await uploadBuffer(file.buffer, folder, file.originalname, file.mimetype);
+
+  const result = await pool.query(
+    `INSERT INTO property_media (property_id, media_type, url, display_order, is_primary)
+     VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+    [propertyId, mediaType, url, options.displayOrder || 0, options.isPrimary || false]
+  );
+  return result.rows[0];
+}
+
 async function deleteMedia(propertyId, mediaId) {
   const result = await pool.query(
-    'DELETE FROM property_media WHERE id = $1 AND property_id = $2 RETURNING id',
+    'DELETE FROM property_media WHERE id = $1 AND property_id = $2 RETURNING id, url',
     [mediaId, propertyId]
   );
   if (result.rows.length === 0) throw notFound('Media not found for this property');
+  await deleteByUrl(result.rows[0].url);
 }
 
 async function updateAvailability(id, property, isAvailable) {
@@ -278,6 +295,7 @@ module.exports = {
   updateProperty,
   deleteProperty,
   addMedia,
+  uploadMedia,
   deleteMedia,
   updateAvailability,
   updatePricing,

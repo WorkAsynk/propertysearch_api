@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const pool = require('../config/db');
 const { generateOtp, getOtpExpiry } = require('../utils/otp');
+const { uploadBuffer, deleteByUrl } = require('../utils/storage');
 
 // Roles that can always self-register through /auth/register with no token.
 const PUBLIC_SELF_REGISTER_ROLES = ['customer', 'broker'];
@@ -61,13 +62,35 @@ async function findUserByEmailOrMobile(identifier) {
 async function findUserById(id) {
   const result = await pool.query(
     `SELECT u.id, u.tenant_id, u.full_name, u.email, u.mobile, u.status,
-            u.email_verified, u.mobile_verified, u.created_at, r.name AS role_name
+            u.email_verified, u.mobile_verified, u.profile_picture_url,
+            u.created_at, r.name AS role_name
      FROM users u
      JOIN roles r ON r.id = u.role_id
      WHERE u.id = $1`,
     [id]
   );
   return result.rows[0];
+}
+
+// Uploads a file to users/<id>/profile/... in GCS, deletes the previous
+// picture (if any) and records the new public URL on the user row.
+async function uploadProfilePicture(userId, file) {
+  const existing = await pool.query('SELECT profile_picture_url FROM users WHERE id = $1', [userId]);
+  if (existing.rows.length === 0) {
+    const err = new Error('User not found');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const url = await uploadBuffer(file.buffer, `users/${userId}/profile`, file.originalname, file.mimetype);
+
+  await pool.query('UPDATE users SET profile_picture_url = $1 WHERE id = $2', [url, userId]);
+
+  if (existing.rows[0].profile_picture_url) {
+    await deleteByUrl(existing.rows[0].profile_picture_url);
+  }
+
+  return url;
 }
 
 // Activates a pending_approval account (currently only reachable by
@@ -315,6 +338,7 @@ module.exports = {
   getRoleByName,
   findUserByEmailOrMobile,
   findUserById,
+  uploadProfilePicture,
   activateUser,
   registerUser,
   validatePassword,

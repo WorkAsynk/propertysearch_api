@@ -203,6 +203,18 @@ async function getMe(req, res, next) {
   }
 }
 
+// POST /api/auth/me/profile-picture
+async function uploadProfilePicture(req, res, next) {
+  try {
+    if (!req.file) return error(res, 400, 'A file is required (field name: file)');
+
+    const url = await authService.uploadProfilePicture(req.user.id, req.file);
+    return success(res, 200, 'Profile picture updated successfully', { profilePictureUrl: url });
+  } catch (err) {
+    next(err);
+  }
+}
+
 // PUT /api/auth/change-password
 async function changePassword(req, res, next) {
   try {
@@ -246,6 +258,7 @@ module.exports = {
   forgotPassword,
   resetPassword,
   getMe,
+  uploadProfilePicture,
   changePassword,
   activateUser,
 };

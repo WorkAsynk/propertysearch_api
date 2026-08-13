@@ -5,6 +5,7 @@ const router = express.Router();
 const propertyController = require('../controllers/property.controller');
 const validate = require('../middlewares/validate');
 const { authenticate, authorize } = require('../middlewares/auth');
+const { uploadPropertyMedia } = require('../middlewares/upload');
 
 const PROPERTY_TYPES = ['apartment', 'villa', 'independent_house', 'plot', 'commercial', 'farmhouse', 'other'];
 const TRANSACTION_TYPES = ['buy', 'sell', 'rent'];
@@ -228,11 +229,11 @@ router.delete(
  * @swagger
  * /properties/{id}/media:
  *   post:
- *     summary: Attach media (images/videos) to a property
+ *     summary: Attach media (images/videos) to a property via pre-hosted URLs
  *     description: >
- *       Accepts media URLs directly in the body. File upload infrastructure
- *       (multer/S3) is not wired up yet - the caller is expected to host the
- *       media elsewhere and pass the resulting URLs here.
+ *       Accepts media URLs directly in the body, for media already hosted
+ *       elsewhere. To upload a file to this app's own storage instead, use
+ *       `POST /properties/{id}/media/upload`.
  *     tags: [Properties]
  *     security:
  *       - bearerAuth: []
@@ -278,6 +279,55 @@ router.post(
   ],
   validate,
   propertyController.addMedia
+);
+
+/**
+ * @swagger
+ * /properties/{id}/media/upload:
+ *   post:
+ *     summary: Upload an image or video file for a property to Cloud Storage
+ *     description: >
+ *       Uploads the file to `properties/{id}/images/...` or
+ *       `properties/{id}/videos/...` in the GCS bucket (media type is
+ *       inferred from the file's content type) and records the resulting
+ *       public URL in property_media. Postgres stores only the URL, never
+ *       the file itself.
+ *     tags: [Properties]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [file]
+ *             properties:
+ *               file: { type: string, format: binary }
+ *               displayOrder: { type: integer, example: 0 }
+ *               isPrimary: { type: boolean, example: true }
+ *     responses:
+ *       201:
+ *         description: Media uploaded successfully
+ *       400:
+ *         description: Missing/oversized/unsupported file
+ *       403:
+ *         description: Not the owner/tenant manager/admin
+ *       404:
+ *         description: Property not found
+ */
+router.post(
+  '/:id/media/upload',
+  authenticate,
+  [param('id').isUUID().withMessage('Invalid property id')],
+  validate,
+  uploadPropertyMedia.single('file'),
+  propertyController.uploadMedia
 );
 
 /**

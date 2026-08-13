@@ -6,7 +6,8 @@ function notFoundHandler(req, res, next) {
 
 function errorHandler(err, req, res, next) {
   console.error(err);
-  const statusCode = err.statusCode || 500;
+  // multer (file size/type) errors don't set statusCode - treat as 400s
+  const statusCode = err.statusCode || (err.name === 'MulterError' ? 400 : 500);
   error(res, statusCode, err.message || 'Internal server error');
 }
 

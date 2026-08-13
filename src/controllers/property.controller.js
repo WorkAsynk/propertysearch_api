@@ -1,5 +1,5 @@
 const propertyService = require('../services/property.service');
-const { success } = require('../utils/response');
+const { success, error } = require('../utils/response');
 const { assertOwnerOrAdmin, assertTenantVisible } = require('../utils/ownership');
 
 // GET /api/properties
@@ -90,6 +90,24 @@ async function addMedia(req, res, next) {
   }
 }
 
+// POST /api/properties/:id/media/upload
+async function uploadMedia(req, res, next) {
+  try {
+    if (!req.file) return error(res, 400, 'A file is required (field name: file)');
+
+    const existing = await propertyService.getPropertyById(req.params.id);
+    assertOwnerOrAdmin(req.user, existing, { allowTenantManagers: ['agency_admin'] });
+
+    const media = await propertyService.uploadMedia(req.params.id, req.file, {
+      isPrimary: req.body.isPrimary === 'true' || req.body.isPrimary === true,
+      displayOrder: Number(req.body.displayOrder) || 0,
+    });
+    return success(res, 201, 'Media uploaded successfully', media);
+  } catch (err) {
+    next(err);
+  }
+}
+
 // DELETE /api/properties/:id/media/:mediaId
 async function deleteMedia(req, res, next) {
   try {
@@ -171,6 +189,7 @@ module.exports = {
   updateProperty,
   deleteProperty,
   addMedia,
+  uploadMedia,
   deleteMedia,
   updateAvailability,
   updatePricing,
