@@ -3,6 +3,7 @@ const { body, param } = require('express-validator');
 const router = express.Router();
 
 const authController = require('../controllers/auth.controller');
+const userController = require('../controllers/user.controller');
 const validate = require('../middlewares/validate');
 const { authenticate, authorize, optionalAuthenticate } = require('../middlewares/auth');
 const { uploadProfilePicture } = require('../middlewares/upload');
@@ -390,6 +391,47 @@ router.post(
  *         description: Not authenticated
  */
 router.get('/me', authenticate, authController.getMe);
+
+/**
+ * @swagger
+ * /auth/me:
+ *   put:
+ *     summary: Edit the currently logged-in user's own profile
+ *     description: >
+ *       Self-service profile edit - fullName/email/mobile only. To change
+ *       password use `PUT /auth/change-password`; to change role or another
+ *       user's details, an admin/agency_admin must use the `/users` endpoints.
+ *     tags: [Authentication]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               fullName: { type: string, example: Rahul Sharma }
+ *               email: { type: string, example: rahul@example.com }
+ *               mobile: { type: string, example: "9876543210" }
+ *     responses:
+ *       200:
+ *         description: Profile updated successfully
+ *       401:
+ *         description: Not authenticated
+ *       422:
+ *         description: Validation failed
+ */
+router.put(
+  '/me',
+  authenticate,
+  [
+    body('email').optional().isEmail().withMessage('Valid email required'),
+    body('mobile').optional().isMobilePhone().withMessage('Valid mobile number required'),
+  ],
+  validate,
+  userController.updateOwnProfile
+);
 
 /**
  * @swagger

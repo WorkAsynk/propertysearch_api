@@ -1,8 +1,10 @@
 const path = require('path');
 const { randomUUID } = require('crypto');
-const { bucket } = require('../config/gcs');
+const { getBucket } = require('../config/gcs');
 
-const PUBLIC_URL_PREFIX = `https://storage.googleapis.com/${process.env.GCS_BUCKET_NAME || ''}/`;
+function publicUrlPrefix() {
+  return `https://storage.googleapis.com/${process.env.GCS_BUCKET_NAME}/`;
+}
 
 // Uploads a buffer to GCS under `<folder>/<uuid><ext>` and returns its public
 // URL. The bucket is expected to already have bucket-level public read
@@ -11,7 +13,7 @@ const PUBLIC_URL_PREFIX = `https://storage.googleapis.com/${process.env.GCS_BUCK
 async function uploadBuffer(buffer, folder, originalName, mimetype) {
   const ext = path.extname(originalName || '');
   const objectPath = `${folder}/${randomUUID()}${ext}`;
-  const file = bucket.file(objectPath);
+  const file = getBucket().file(objectPath);
 
   await file.save(buffer, {
     resumable: false,
@@ -19,18 +21,19 @@ async function uploadBuffer(buffer, folder, originalName, mimetype) {
     metadata: { cacheControl: 'public, max-age=31536000' },
   });
 
-  return `${PUBLIC_URL_PREFIX}${objectPath}`;
+  return `${publicUrlPrefix()}${objectPath}`;
 }
 
 // Best-effort delete of a previously uploaded object, given its public URL.
 // Silently no-ops on URLs that weren't produced by uploadBuffer (e.g. legacy
 // externally-hosted URLs) and swallows "already gone" errors.
 async function deleteByUrl(url) {
-  if (!url || !url.startsWith(PUBLIC_URL_PREFIX)) return;
+  const prefix = publicUrlPrefix();
+  if (!url || !url.startsWith(prefix)) return;
 
-  const objectPath = url.slice(PUBLIC_URL_PREFIX.length);
+  const objectPath = url.slice(prefix.length);
   try {
-    await bucket.file(objectPath).delete();
+    await getBucket().file(objectPath).delete();
   } catch (err) {
     if (err.code !== 404) throw err;
   }
