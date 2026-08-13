@@ -1,0 +1,36 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'asia-south1-docker.pkg.dev/$PROJECT_ID/propertysearch-api/propertysearch-api:$COMMIT_SHA'
+      - '-t'
+      - 'asia-south1-docker.pkg.dev/$PROJECT_ID/propertysearch-api/propertysearch-api:latest'
+      - '.'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'asia-south1-docker.pkg.dev/$PROJECT_ID/propertysearch-api/propertysearch-api:$COMMIT_SHA'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'asia-south1-docker.pkg.dev/$PROJECT_ID/propertysearch-api/propertysearch-api:latest'
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'services'
+      - 'update'
+      - 'propertysearch-api-prod'
+      - '--image=asia-south1-docker.pkg.dev/$PROJECT_ID/propertysearch-api/propertysearch-api:$COMMIT_SHA'
+      - '--region=asia-south1'
+
+images:
+  - 'asia-south1-docker.pkg.dev/$PROJECT_ID/propertysearch-api/propertysearch-api:$COMMIT_SHA'
+  - 'asia-south1-docker.pkg.dev/$PROJECT_ID/propertysearch-api/propertysearch-api:latest'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
