@@ -15,11 +15,29 @@ function badRequest(message) {
   return err;
 }
 
+// Every human-readable field (names, titles) a lead row needs for display -
+// the leads table itself only stores FK ids. Shared by listLeads/getLeadById
+// so the shape returned to the frontend is identical everywhere.
+const LEAD_SELECT = `
+  SELECT l.*,
+         c.full_name AS customer_name, c.email AS customer_email, c.mobile AS customer_mobile,
+         cp.budget_min AS customer_budget_min, cp.budget_max AS customer_budget_max,
+         p.title AS property_title, p.price AS property_price,
+         assignee.full_name AS assigned_to_name,
+         creator.full_name AS created_by_name
+  FROM leads l
+  JOIN customers c ON c.id = l.customer_id
+  LEFT JOIN customer_preferences cp ON cp.customer_id = c.id
+  LEFT JOIN properties p ON p.id = l.property_id
+  LEFT JOIN users assignee ON assignee.id = l.assigned_to
+  LEFT JOIN users creator ON creator.id = l.created_by
+`;
+
 function applyTenantScope(user, where, params) {
   if (isAdmin(user.role)) return;
   params.push(user.tenant_id || null, user.id, user.id);
   where.push(
-    `(tenant_id = $${params.length - 2} OR created_by = $${params.length - 1} OR assigned_to = $${params.length})`
+    `(l.tenant_id = $${params.length - 2} OR l.created_by = $${params.length - 1} OR l.assigned_to = $${params.length})`
   );
 }
 
@@ -40,35 +58,35 @@ async function listLeads(user, filters, page, limit) {
 
   if (filters.status) {
     params.push(filters.status);
-    where.push(`status = $${params.length}`);
+    where.push(`l.status = $${params.length}`);
   }
   if (filters.assignedTo) {
     params.push(filters.assignedTo);
-    where.push(`assigned_to = $${params.length}`);
+    where.push(`l.assigned_to = $${params.length}`);
   }
   if (filters.source) {
     params.push(filters.source);
-    where.push(`source = $${params.length}`);
+    where.push(`l.source = $${params.length}`);
   }
   if (filters.dateFrom) {
     params.push(filters.dateFrom);
-    where.push(`created_at >= $${params.length}`);
+    where.push(`l.created_at >= $${params.length}`);
   }
   if (filters.dateTo) {
     params.push(filters.dateTo);
-    where.push(`created_at <= $${params.length}`);
+    where.push(`l.created_at <= $${params.length}`);
   }
 
   const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const offset = (page - 1) * limit;
 
-  const countResult = await pool.query(`SELECT COUNT(*) FROM leads ${whereClause}`, params);
+  const countResult = await pool.query(`SELECT COUNT(*) FROM leads l ${whereClause}`, params);
 
   params.push(limit, offset);
   const result = await pool.query(
-    `SELECT * FROM leads
+    `${LEAD_SELECT}
      ${whereClause}
-     ORDER BY created_at DESC
+     ORDER BY l.created_at DESC
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   );
@@ -85,7 +103,7 @@ async function listLeads(user, filters, page, limit) {
 }
 
 async function getLeadById(id) {
-  const result = await pool.query('SELECT * FROM leads WHERE id = $1', [id]);
+  const result = await pool.query(`${LEAD_SELECT} WHERE l.id = $1`, [id]);
   const lead = result.rows[0];
   if (!lead) throw notFound();
   return lead;
@@ -113,7 +131,7 @@ async function createLead(data, user) {
 
     await client.query('COMMIT');
     await sendAcknowledgement(lead.id, user);
-    return lead;
+    return getLeadById(lead.id);
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
@@ -163,7 +181,7 @@ async function createPublicInquiry(data) {
 
     await client.query('COMMIT');
     await sendAcknowledgement(lead.id, null);
-    return lead;
+    return getLeadById(lead.id);
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
@@ -191,12 +209,12 @@ async function updateLead(id, data) {
   if (set.length === 0) throw badRequest('No updatable fields provided');
 
   params.push(id);
-  const result = await pool.query(
+  await pool.query(
     `UPDATE leads SET ${set.join(', ')} WHERE id = $${params.length} RETURNING *`,
     params
   );
 
-  return result.rows[0];
+  return getLeadById(id);
 }
 
 async function assignLead(id, assigneeId, user) {
@@ -220,7 +238,7 @@ async function assignLead(id, assigneeId, user) {
     if (current.rows.length === 0) throw notFound();
     const previousAssignee = current.rows[0].assigned_to;
 
-    const result = await client.query(
+    await client.query(
       'UPDATE leads SET assigned_to = $1 WHERE id = $2 RETURNING *',
       [assigneeId, id]
     );
@@ -231,7 +249,7 @@ async function assignLead(id, assigneeId, user) {
     });
 
     await client.query('COMMIT');
-    return result.rows[0];
+    return getLeadById(id);
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
@@ -249,7 +267,7 @@ async function updateStatus(id, status, user) {
     if (current.rows.length === 0) throw notFound();
     const previousStatus = current.rows[0].status;
 
-    const result = await client.query(
+    await client.query(
       'UPDATE leads SET status = $1 WHERE id = $2 RETURNING *',
       [status, id]
     );
@@ -260,7 +278,7 @@ async function updateStatus(id, status, user) {
     });
 
     await client.query('COMMIT');
-    return result.rows[0];
+    return getLeadById(id);
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
@@ -279,8 +297,16 @@ async function addNote(leadId, note, user) {
 
 async function getTimeline(leadId) {
   const [notes, activity] = await Promise.all([
-    pool.query('SELECT * FROM lead_notes WHERE lead_id = $1', [leadId]),
-    pool.query('SELECT * FROM lead_activity_log WHERE lead_id = $1', [leadId]),
+    pool.query(
+      `SELECT n.*, u.full_name AS author_name FROM lead_notes n
+       LEFT JOIN users u ON u.id = n.user_id WHERE n.lead_id = $1`,
+      [leadId]
+    ),
+    pool.query(
+      `SELECT a.*, u.full_name AS author_name FROM lead_activity_log a
+       LEFT JOIN users u ON u.id = a.user_id WHERE a.lead_id = $1`,
+      [leadId]
+    ),
   ]);
 
   const combined = [
@@ -294,7 +320,8 @@ async function getTimeline(leadId) {
 
 async function getActivity(leadId) {
   const result = await pool.query(
-    'SELECT * FROM lead_activity_log WHERE lead_id = $1 ORDER BY created_at ASC',
+    `SELECT a.*, u.full_name AS author_name FROM lead_activity_log a
+     LEFT JOIN users u ON u.id = a.user_id WHERE a.lead_id = $1 ORDER BY a.created_at ASC`,
     [leadId]
   );
   return result.rows;

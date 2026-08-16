@@ -3,9 +3,10 @@ const pool = require('../config/db');
 const { isAdmin, assertOwnerOrAdmin } = require('../utils/ownership');
 const { deleteByUrl } = require('../utils/storage');
 
-const USER_COLUMNS = `u.id, u.tenant_id, u.full_name, u.email, u.mobile, u.status,
+const USER_COLUMNS = `u.id, u.tenant_id, t.name AS tenant_name, u.full_name, u.email, u.mobile, u.status,
     u.email_verified, u.mobile_verified, u.profile_picture_url,
     u.last_login_at, u.created_at, u.updated_at, r.name AS role_name`;
+const USER_JOINS = `JOIN roles r ON r.id = u.role_id LEFT JOIN tenants t ON t.id = u.tenant_id`;
 
 // super_admin can move a user to any role; admin is limited to the
 // non-admin-tier roles, mirroring auth.service's ROLE_CREATION_PERMISSIONS.
@@ -34,7 +35,7 @@ function forbidden(message) {
 
 async function getUserById(actingUser, id) {
   const result = await pool.query(
-    `SELECT ${USER_COLUMNS} FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = $1`,
+    `SELECT ${USER_COLUMNS} FROM users u ${USER_JOINS} WHERE u.id = $1`,
     [id]
   );
   const user = result.rows[0];
@@ -82,7 +83,7 @@ async function listUsers(actingUser, filters, page, limit) {
   const offset = (page - 1) * limit;
   const result = await pool.query(
     `SELECT ${USER_COLUMNS}
-     FROM users u JOIN roles r ON r.id = u.role_id
+     FROM users u ${USER_JOINS}
      ${whereSql}
      ORDER BY u.created_at DESC
      LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
@@ -127,7 +128,7 @@ async function updateUser(actingUser, id, updates) {
 async function updateOwnProfile(userId, updates) {
   await applyProfileUpdate(userId, updates, ['fullName', 'email', 'mobile']);
   const result = await pool.query(
-    `SELECT ${USER_COLUMNS} FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = $1`,
+    `SELECT ${USER_COLUMNS} FROM users u ${USER_JOINS} WHERE u.id = $1`,
     [userId]
   );
   return result.rows[0];

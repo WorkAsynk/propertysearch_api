@@ -13,10 +13,17 @@ function badRequest(message) {
   return err;
 }
 
+const CUSTOMER_SELECT = `
+  SELECT c.*, t.name AS tenant_name, creator.full_name AS created_by_name
+  FROM customers c
+  LEFT JOIN tenants t ON t.id = c.tenant_id
+  LEFT JOIN users creator ON creator.id = c.created_by
+`;
+
 function applyTenantScope(user, where, params) {
   if (isAdmin(user.role)) return;
   params.push(user.tenant_id || null, user.id);
-  where.push(`(tenant_id = $${params.length - 1} OR created_by = $${params.length})`);
+  where.push(`(c.tenant_id = $${params.length - 1} OR c.created_by = $${params.length})`);
 }
 
 async function listCustomers(user, filters, page, limit) {
@@ -27,19 +34,19 @@ async function listCustomers(user, filters, page, limit) {
 
   if (filters.search) {
     params.push(`%${filters.search}%`);
-    where.push(`(full_name ILIKE $${params.length} OR email ILIKE $${params.length} OR mobile ILIKE $${params.length})`);
+    where.push(`(c.full_name ILIKE $${params.length} OR c.email ILIKE $${params.length} OR c.mobile ILIKE $${params.length})`);
   }
 
   const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const offset = (page - 1) * limit;
 
-  const countResult = await pool.query(`SELECT COUNT(*) FROM customers ${whereClause}`, params);
+  const countResult = await pool.query(`SELECT COUNT(*) FROM customers c ${whereClause}`, params);
 
   params.push(limit, offset);
   const result = await pool.query(
-    `SELECT * FROM customers
+    `${CUSTOMER_SELECT}
      ${whereClause}
-     ORDER BY created_at DESC
+     ORDER BY c.created_at DESC
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   );
@@ -56,7 +63,7 @@ async function listCustomers(user, filters, page, limit) {
 }
 
 async function getCustomerById(id) {
-  const result = await pool.query('SELECT * FROM customers WHERE id = $1', [id]);
+  const result = await pool.query(`${CUSTOMER_SELECT} WHERE c.id = $1`, [id]);
   const customer = result.rows[0];
   if (!customer) throw notFound();
   return customer;
@@ -76,7 +83,7 @@ async function createCustomer(data, user) {
     [user.tenant_id || null, user.id, userId || null, fullName, email || null, mobile || null]
   );
 
-  return result.rows[0];
+  return getCustomerById(result.rows[0].id);
 }
 
 // Used by the lead public-inquiry flow: reuses an existing customer record
@@ -121,12 +128,12 @@ async function updateCustomer(id, data) {
   if (set.length === 0) throw badRequest('No updatable fields provided');
 
   params.push(id);
-  const result = await pool.query(
+  await pool.query(
     `UPDATE customers SET ${set.join(', ')} WHERE id = $${params.length} RETURNING *`,
     params
   );
 
-  return result.rows[0];
+  return getCustomerById(id);
 }
 
 async function getPreferences(customerId) {

@@ -14,12 +14,27 @@ function badRequest(message) {
   return err;
 }
 
+// Every human-readable field a property row needs for display - the
+// properties table itself only stores FK ids. Shared by listProperties/
+// getPropertyById so the shape returned to the frontend is identical
+// everywhere.
+const PROPERTY_SELECT = `
+  SELECT p.*,
+         creator.full_name AS created_by_name,
+         broker.full_name AS broker_name,
+         builder.full_name AS builder_name
+  FROM properties p
+  LEFT JOIN users creator ON creator.id = p.created_by
+  LEFT JOIN users broker ON broker.id = p.broker_id
+  LEFT JOIN users builder ON builder.id = p.builder_id
+`;
+
 // Restricts a listing query to the caller's own tenant/records unless
 // they are admin/super_admin, per the module's tenant-isolation rule.
 function applyTenantScope(user, where, params) {
   if (isAdmin(user.role)) return;
   params.push(user.tenant_id || null, user.id);
-  where.push(`(tenant_id = $${params.length - 1} OR created_by = $${params.length})`);
+  where.push(`(p.tenant_id = $${params.length - 1} OR p.created_by = $${params.length})`);
 }
 
 async function listProperties(user, filters, page, limit) {
@@ -30,27 +45,27 @@ async function listProperties(user, filters, page, limit) {
 
   if (filters.city) {
     params.push(filters.city);
-    where.push(`city ILIKE $${params.length}`);
+    where.push(`p.city ILIKE $${params.length}`);
   }
   if (filters.propertyType) {
     params.push(filters.propertyType);
-    where.push(`property_type = $${params.length}`);
+    where.push(`p.property_type = $${params.length}`);
   }
   if (filters.transactionType) {
     params.push(filters.transactionType);
-    where.push(`transaction_type = $${params.length}`);
+    where.push(`p.transaction_type = $${params.length}`);
   }
   if (filters.status) {
     params.push(filters.status);
-    where.push(`status = $${params.length}`);
+    where.push(`p.status = $${params.length}`);
   }
   if (filters.minPrice) {
     params.push(filters.minPrice);
-    where.push(`price >= $${params.length}`);
+    where.push(`p.price >= $${params.length}`);
   }
   if (filters.maxPrice) {
     params.push(filters.maxPrice);
-    where.push(`price <= $${params.length}`);
+    where.push(`p.price <= $${params.length}`);
   }
   // Used by the Broker CRM dashboard (GET /api/broker/inventory) to scope
   // to "properties created by or assigned (as broker) to this user" - kept
@@ -58,22 +73,22 @@ async function listProperties(user, filters, page, limit) {
   // owns all properties-table querying.
   if (filters.brokerId) {
     params.push(filters.brokerId);
-    where.push(`(created_by = $${params.length} OR broker_id = $${params.length})`);
+    where.push(`(p.created_by = $${params.length} OR p.broker_id = $${params.length})`);
   }
 
   const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const offset = (page - 1) * limit;
 
   const countResult = await pool.query(
-    `SELECT COUNT(*) FROM properties ${whereClause}`,
+    `SELECT COUNT(*) FROM properties p ${whereClause}`,
     params
   );
 
   params.push(limit, offset);
   const result = await pool.query(
-    `SELECT * FROM properties
+    `${PROPERTY_SELECT}
      ${whereClause}
-     ORDER BY created_at DESC
+     ORDER BY p.created_at DESC
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   );
@@ -90,7 +105,7 @@ async function listProperties(user, filters, page, limit) {
 }
 
 async function getPropertyById(id) {
-  const result = await pool.query('SELECT * FROM properties WHERE id = $1', [id]);
+  const result = await pool.query(`${PROPERTY_SELECT} WHERE p.id = $1`, [id]);
   const property = result.rows[0];
   if (!property) throw notFound();
 
@@ -152,7 +167,7 @@ async function createProperty(data, user) {
     ]
   );
 
-  return result.rows[0];
+  return getPropertyById(result.rows[0].id);
 }
 
 const UPDATABLE_FIELDS = {
@@ -188,12 +203,12 @@ async function updateProperty(id, data) {
   if (set.length === 0) throw badRequest('No updatable fields provided');
 
   params.push(id);
-  const result = await pool.query(
+  await pool.query(
     `UPDATE properties SET ${set.join(', ')} WHERE id = $${params.length} RETURNING *`,
     params
   );
 
-  return result.rows[0];
+  return getPropertyById(id);
 }
 
 async function deleteProperty(id) {
@@ -251,41 +266,35 @@ async function updateAvailability(id, property, isAvailable) {
   }
 
   const newStatus = isAvailable ? 'approved' : 'inactive';
-  const result = await pool.query(
-    'UPDATE properties SET status = $1 WHERE id = $2 RETURNING *',
-    [newStatus, id]
-  );
-  return result.rows[0];
+  await pool.query('UPDATE properties SET status = $1 WHERE id = $2 RETURNING *', [newStatus, id]);
+  return getPropertyById(id);
 }
 
 async function updatePricing(id, price) {
-  const result = await pool.query(
-    'UPDATE properties SET price = $1 WHERE id = $2 RETURNING *',
-    [price, id]
-  );
-  return result.rows[0];
+  await pool.query('UPDATE properties SET price = $1 WHERE id = $2 RETURNING *', [price, id]);
+  return getPropertyById(id);
 }
 
 async function approveProperty(id, adminUser) {
   const result = await pool.query(
     `UPDATE properties
      SET status = 'approved', approved_by = $1, approved_at = now(), rejection_reason = NULL
-     WHERE id = $2 RETURNING *`,
+     WHERE id = $2 RETURNING id`,
     [adminUser.id, id]
   );
   if (result.rows.length === 0) throw notFound();
-  return result.rows[0];
+  return getPropertyById(id);
 }
 
 async function rejectProperty(id, reason, adminUser) {
   const result = await pool.query(
     `UPDATE properties
      SET status = 'rejected', rejection_reason = $1, approved_by = $2, approved_at = now()
-     WHERE id = $3 RETURNING *`,
+     WHERE id = $3 RETURNING id`,
     [reason, adminUser.id, id]
   );
   if (result.rows.length === 0) throw notFound();
-  return result.rows[0];
+  return getPropertyById(id);
 }
 
 module.exports = {
