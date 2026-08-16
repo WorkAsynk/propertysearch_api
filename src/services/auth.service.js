@@ -61,11 +61,14 @@ async function findUserByEmailOrMobile(identifier) {
 
 async function findUserById(id) {
   const result = await pool.query(
-    `SELECT u.id, u.tenant_id, u.full_name, u.email, u.mobile, u.status,
+    `SELECT u.id, u.tenant_id, t.name AS tenant_name, t.slug AS tenant_slug,
+            u.role_id, r.name AS role_name, r.description AS role_description,
+            u.full_name, u.email, u.mobile, u.status,
             u.email_verified, u.mobile_verified, u.profile_picture_url,
-            u.created_at, r.name AS role_name
+            u.created_by, u.last_login_at, u.created_at, u.updated_at
      FROM users u
      JOIN roles r ON r.id = u.role_id
+     LEFT JOIN tenants t ON t.id = u.tenant_id
      WHERE u.id = $1`,
     [id]
   );
