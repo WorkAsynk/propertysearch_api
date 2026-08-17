@@ -2,7 +2,7 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const pool = require('../config/db');
 const { generateOtp, getOtpExpiry } = require('../utils/otp');
-const { uploadBuffer, deleteByUrl } = require('../utils/storage');
+const { uploadBuffer, deleteObject, getReadUrl } = require('../utils/storage');
 
 // Roles that can always self-register through /auth/register with no token.
 const PUBLIC_SELF_REGISTER_ROLES = ['customer', 'broker'];
@@ -72,11 +72,15 @@ async function findUserById(id) {
      WHERE u.id = $1`,
     [id]
   );
-  return result.rows[0];
+  const user = result.rows[0];
+  if (user) user.profile_picture_url = await getReadUrl(user.profile_picture_url);
+  return user;
 }
 
 // Uploads a file to users/<id>/profile/... in GCS, deletes the previous
-// picture (if any) and records the new public URL on the user row.
+// picture (if any) and records the new object path on the user row. The
+// bucket is private, so what's returned to the caller is a freshly signed,
+// browsable URL - never the bare object path that's actually stored.
 async function uploadProfilePicture(userId, file) {
   const existing = await pool.query('SELECT profile_picture_url FROM users WHERE id = $1', [userId]);
   if (existing.rows.length === 0) {
@@ -85,15 +89,15 @@ async function uploadProfilePicture(userId, file) {
     throw err;
   }
 
-  const url = await uploadBuffer(file.buffer, `users/${userId}/profile`, file.originalname, file.mimetype);
+  const objectPath = await uploadBuffer(file.buffer, `users/${userId}/profile`, file.originalname, file.mimetype);
 
-  await pool.query('UPDATE users SET profile_picture_url = $1 WHERE id = $2', [url, userId]);
+  await pool.query('UPDATE users SET profile_picture_url = $1 WHERE id = $2', [objectPath, userId]);
 
   if (existing.rows[0].profile_picture_url) {
-    await deleteByUrl(existing.rows[0].profile_picture_url);
+    await deleteObject(existing.rows[0].profile_picture_url);
   }
 
-  return url;
+  return getReadUrl(objectPath);
 }
 
 // Activates a pending_approval account (currently only reachable by

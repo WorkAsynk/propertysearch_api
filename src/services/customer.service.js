@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const { isAdmin } = require('../utils/ownership');
+const { signUrls } = require('../utils/storage');
 
 function notFound(message = 'Customer not found') {
   const err = new Error(message);
@@ -186,9 +187,14 @@ async function getDocuments(customerId) {
     'SELECT * FROM customer_documents WHERE customer_id = $1 ORDER BY created_at DESC',
     [customerId]
   );
-  return result.rows;
+  return signUrls(result.rows, 'document_url');
 }
 
+// documentUrl is client-supplied (this endpoint takes a URL/path directly,
+// there's no file upload step here) - it may be one of our GCS objects or a
+// fully external URL. signUrls()/getReadUrl() only sign what's actually
+// ours and pass anything else through untouched, so it's safe to run
+// unconditionally.
 async function addDocument(customerId, data, user) {
   const { documentUrl, documentType, dealId } = data;
 
@@ -199,7 +205,7 @@ async function addDocument(customerId, data, user) {
     [customerId, dealId || null, documentUrl, documentType || null, user.id]
   );
 
-  return result.rows[0];
+  return signUrls(result.rows[0], 'document_url');
 }
 
 // Used by GET /api/customers/:id/deals, now that the Deal Pipeline module's

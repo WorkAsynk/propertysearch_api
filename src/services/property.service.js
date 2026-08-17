@@ -1,6 +1,6 @@
 const pool = require('../config/db');
 const { isAdmin } = require('../utils/ownership');
-const { uploadBuffer, deleteByUrl } = require('../utils/storage');
+const { uploadBuffer, deleteObject, signUrls } = require('../utils/storage');
 
 function notFound(message = 'Property not found') {
   const err = new Error(message);
@@ -114,7 +114,7 @@ async function getPropertyById(id) {
     [id]
   );
 
-  return { ...property, media: media.rows };
+  return { ...property, media: await signUrls(media.rows, 'url') };
 }
 
 async function createProperty(data, user) {
@@ -231,22 +231,23 @@ async function addMedia(propertyId, mediaItems) {
     );
     inserted.push(result.rows[0]);
   }
-  return inserted;
+  return signUrls(inserted, 'url');
 }
 
 // Uploads a single file straight to GCS (properties/<id>/images|videos/...)
-// and records the resulting public URL in property_media.
+// and records the resulting object path in property_media (the bucket is
+// private, so what's stored is a path, never a browsable URL).
 async function uploadMedia(propertyId, file, options = {}) {
   const mediaType = file.mimetype.startsWith('video/') ? 'video' : 'image';
   const folder = `properties/${propertyId}/${mediaType === 'video' ? 'videos' : 'images'}`;
-  const url = await uploadBuffer(file.buffer, folder, file.originalname, file.mimetype);
+  const objectPath = await uploadBuffer(file.buffer, folder, file.originalname, file.mimetype);
 
   const result = await pool.query(
     `INSERT INTO property_media (property_id, media_type, url, display_order, is_primary)
      VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-    [propertyId, mediaType, url, options.displayOrder || 0, options.isPrimary || false]
+    [propertyId, mediaType, objectPath, options.displayOrder || 0, options.isPrimary || false]
   );
-  return result.rows[0];
+  return signUrls(result.rows[0], 'url');
 }
 
 async function deleteMedia(propertyId, mediaId) {
@@ -255,7 +256,7 @@ async function deleteMedia(propertyId, mediaId) {
     [mediaId, propertyId]
   );
   if (result.rows.length === 0) throw notFound('Media not found for this property');
-  await deleteByUrl(result.rows[0].url);
+  await deleteObject(result.rows[0].url);
 }
 
 // Cover photo is mutually exclusive - clearing every other flag and setting
@@ -279,7 +280,7 @@ async function setPrimaryMedia(propertyId, mediaId) {
     );
 
     await client.query('COMMIT');
-    return result.rows[0];
+    return signUrls(result.rows[0], 'url');
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;

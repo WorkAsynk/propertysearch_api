@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const { isAdmin } = require('../utils/ownership');
+const { signUrls } = require('../utils/storage');
 
 function notFound(message = 'Document not found') {
   const err = new Error(message);
@@ -57,7 +58,7 @@ async function listDocuments(user, filters, page, limit) {
   );
 
   return {
-    items: result.rows,
+    items: await signUrls(result.rows, 'document_url'),
     pagination: {
       page,
       limit,
@@ -71,9 +72,11 @@ async function getDocumentById(id) {
   const result = await pool.query('SELECT * FROM documents WHERE id = $1', [id]);
   const document = result.rows[0];
   if (!document) throw notFound();
-  return document;
+  return signUrls(document, 'document_url');
 }
 
+// documentUrl is client-supplied, same as customer.service.js's addDocument -
+// signUrls() only touches values that resolve to one of our GCS objects.
 async function createDocument(data, user) {
   const { customerId, dealId, documentType, documentUrl, fileName } = data;
 
@@ -92,7 +95,7 @@ async function createDocument(data, user) {
     ]
   );
 
-  return result.rows[0];
+  return signUrls(result.rows[0], 'document_url');
 }
 
 const UPDATABLE_DOCUMENT_FIELDS = {
@@ -122,7 +125,7 @@ async function updateDocument(id, data) {
     params
   );
 
-  return result.rows[0];
+  return signUrls(result.rows[0], 'document_url');
 }
 
 async function deleteDocument(id) {
@@ -138,7 +141,7 @@ async function getByCustomer(user, customerId) {
     `SELECT * FROM documents WHERE ${where.join(' AND ')} ORDER BY created_at DESC`,
     params
   );
-  return result.rows;
+  return signUrls(result.rows, 'document_url');
 }
 
 async function getByDeal(user, dealId) {
@@ -150,7 +153,7 @@ async function getByDeal(user, dealId) {
     `SELECT * FROM documents WHERE ${where.join(' AND ')} ORDER BY created_at DESC`,
     params
   );
-  return result.rows;
+  return signUrls(result.rows, 'document_url');
 }
 
 async function reviewDocument(id, { status, reviewNotes }, reviewer) {
@@ -159,7 +162,7 @@ async function reviewDocument(id, { status, reviewNotes }, reviewer) {
     [status, reviewer.id, reviewNotes || null, id]
   );
   if (result.rows.length === 0) throw notFound();
-  return result.rows[0];
+  return signUrls(result.rows[0], 'document_url');
 }
 
 module.exports = {

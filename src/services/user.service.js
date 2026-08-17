@@ -1,7 +1,7 @@
 const bcrypt = require('bcryptjs');
 const pool = require('../config/db');
 const { isAdmin, assertOwnerOrAdmin } = require('../utils/ownership');
-const { deleteByUrl } = require('../utils/storage');
+const { deleteObject, getReadUrl, signUrls } = require('../utils/storage');
 
 const USER_COLUMNS = `u.id, u.tenant_id, t.name AS tenant_name, u.full_name, u.email, u.mobile, u.status,
     u.email_verified, u.mobile_verified, u.profile_picture_url,
@@ -33,7 +33,11 @@ function forbidden(message) {
   return err;
 }
 
-async function getUserById(actingUser, id) {
+// Raw fetch, no URL signing - used internally wherever the *stored* value of
+// profile_picture_url is needed (permission checks, or deleting the old
+// picture by its stored object path/URL). Signing here would corrupt that
+// value for anything downstream that isn't an HTTP response.
+async function fetchUserRow(actingUser, id) {
   const result = await pool.query(
     `SELECT ${USER_COLUMNS} FROM users u ${USER_JOINS} WHERE u.id = $1`,
     [id]
@@ -42,6 +46,14 @@ async function getUserById(actingUser, id) {
   if (!user) throw notFound();
 
   assertOwnerOrAdmin(actingUser, user, { allowTenantManagers: ['agency_admin'], ownerFields: ['id'] });
+  return user;
+}
+
+// Public/exported version - this one's result always ends up as an API
+// response, so profile_picture_url is resolved to a fresh signed URL.
+async function getUserById(actingUser, id) {
+  const user = await fetchUserRow(actingUser, id);
+  user.profile_picture_url = await getReadUrl(user.profile_picture_url);
   return user;
 }
 
@@ -91,7 +103,7 @@ async function listUsers(actingUser, filters, page, limit) {
   );
 
   return {
-    items: result.rows,
+    items: await signUrls(result.rows, 'profile_picture_url'),
     pagination: { page, limit, total, totalPages: Math.ceil(total / limit) || 1 },
   };
 }
@@ -120,7 +132,7 @@ async function applyProfileUpdate(id, updates, allowedFields) {
 }
 
 async function updateUser(actingUser, id, updates) {
-  await getUserById(actingUser, id);
+  await fetchUserRow(actingUser, id);
   await applyProfileUpdate(id, updates, ['fullName', 'email', 'mobile', 'status', 'tenantId']);
   return getUserById(actingUser, id);
 }
@@ -131,11 +143,11 @@ async function updateOwnProfile(userId, updates) {
     `SELECT ${USER_COLUMNS} FROM users u ${USER_JOINS} WHERE u.id = $1`,
     [userId]
   );
-  return result.rows[0];
+  return signUrls(result.rows[0], 'profile_picture_url');
 }
 
 async function changeRole(actingUser, id, newRole) {
-  const target = await getUserById(actingUser, id);
+  const target = await fetchUserRow(actingUser, id);
 
   const allowedRoles = ROLE_CHANGE_PERMISSIONS[actingUser.role] || [];
   if (!allowedRoles.includes(newRole)) {
@@ -146,14 +158,14 @@ async function changeRole(actingUser, id, newRole) {
   if (!roleResult.rows[0]) throw badRequest('Invalid role specified');
 
   await pool.query('UPDATE users SET role_id = $1 WHERE id = $2', [roleResult.rows[0].id, id]);
-  return { ...target, role_name: newRole };
+  return signUrls({ ...target, role_name: newRole }, 'profile_picture_url');
 }
 
 // Admin-initiated password reset - no knowledge of the current password
 // required. Revokes existing sessions so the old password stops working
 // immediately everywhere.
 async function adminSetPassword(actingUser, id, newPassword) {
-  await getUserById(actingUser, id);
+  await fetchUserRow(actingUser, id);
 
   const passwordHash = await bcrypt.hash(newPassword, 10);
   await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [passwordHash, id]);
@@ -163,7 +175,9 @@ async function adminSetPassword(actingUser, id, newPassword) {
 async function deleteUser(actingUser, id) {
   if (actingUser.id === id) throw badRequest('You cannot delete your own account');
 
-  const target = await getUserById(actingUser, id);
+  // Raw (unsigned) on purpose - deleteObject() needs the actual stored
+  // object path/URL, not a signed one.
+  const target = await fetchUserRow(actingUser, id);
 
   try {
     await pool.query('DELETE FROM users WHERE id = $1', [id]);
@@ -175,7 +189,7 @@ async function deleteUser(actingUser, id) {
   }
 
   if (target.profile_picture_url) {
-    await deleteByUrl(target.profile_picture_url);
+    await deleteObject(target.profile_picture_url);
   }
 }
 
