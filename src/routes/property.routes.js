@@ -368,6 +368,43 @@ router.delete(
 
 /**
  * @swagger
+ * /properties/{id}/media/{mediaId}/primary:
+ *   put:
+ *     summary: Set a media item as the property's cover photo
+ *     description: Mutually exclusive - clears is_primary on every other media item for this property.
+ *     tags: [Properties]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: path
+ *         name: mediaId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Cover photo updated successfully
+ *       403:
+ *         description: Not the owner/tenant manager/admin
+ *       404:
+ *         description: Property or media not found
+ */
+router.put(
+  '/:id/media/:mediaId/primary',
+  authenticate,
+  [
+    param('id').isUUID().withMessage('Invalid property id'),
+    param('mediaId').isUUID().withMessage('Invalid media id'),
+  ],
+  validate,
+  propertyController.setPrimaryMedia
+);
+
+/**
+ * @swagger
  * /properties/{id}/availability:
  *   put:
  *     summary: Toggle whether an approved property is currently available/live

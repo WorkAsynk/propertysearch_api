@@ -258,6 +258,36 @@ async function deleteMedia(propertyId, mediaId) {
   await deleteByUrl(result.rows[0].url);
 }
 
+// Cover photo is mutually exclusive - clearing every other flag and setting
+// this one is done inside a transaction so a listing can never briefly end
+// up with zero or multiple primaries.
+async function setPrimaryMedia(propertyId, mediaId) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const target = await client.query(
+      'SELECT id FROM property_media WHERE id = $1 AND property_id = $2 FOR UPDATE',
+      [mediaId, propertyId]
+    );
+    if (target.rows.length === 0) throw notFound('Media not found for this property');
+
+    await client.query('UPDATE property_media SET is_primary = false WHERE property_id = $1', [propertyId]);
+    const result = await client.query(
+      'UPDATE property_media SET is_primary = true WHERE id = $1 RETURNING *',
+      [mediaId]
+    );
+
+    await client.query('COMMIT');
+    return result.rows[0];
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 async function updateAvailability(id, property, isAvailable) {
   if (!['approved', 'inactive'].includes(property.status)) {
     throw badRequest(
@@ -306,6 +336,7 @@ module.exports = {
   addMedia,
   uploadMedia,
   deleteMedia,
+  setPrimaryMedia,
   updateAvailability,
   updatePricing,
   approveProperty,

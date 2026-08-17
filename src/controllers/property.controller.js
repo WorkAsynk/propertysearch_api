@@ -121,6 +121,19 @@ async function deleteMedia(req, res, next) {
   }
 }
 
+// PUT /api/properties/:id/media/:mediaId/primary
+async function setPrimaryMedia(req, res, next) {
+  try {
+    const existing = await propertyService.getPropertyById(req.params.id);
+    assertOwnerOrAdmin(req.user, existing, { allowTenantManagers: ['agency_admin'] });
+
+    const media = await propertyService.setPrimaryMedia(req.params.id, req.params.mediaId);
+    return success(res, 200, 'Cover photo updated successfully', media);
+  } catch (err) {
+    next(err);
+  }
+}
+
 // PUT /api/properties/:id/availability
 async function updateAvailability(req, res, next) {
   try {
@@ -191,6 +204,7 @@ module.exports = {
   addMedia,
   uploadMedia,
   deleteMedia,
+  setPrimaryMedia,
   updateAvailability,
   updatePricing,
   approveProperty,
