@@ -8,6 +8,7 @@ const swaggerUi = require('swagger-ui-express');
 const swaggerSpec = require('./config/swagger');
 const authRoutes = require('./routes/auth.routes');
 const userRoutes = require('./routes/user.routes');
+const tenantRoutes = require('./routes/tenant.routes');
 const propertyRoutes = require('./routes/property.routes');
 const searchRoutes = require('./routes/search.routes');
 const { projectRouter, unitRouter } = require('./routes/project.routes');
@@ -58,6 +59,7 @@ app.get('/health', (req, res) => {
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/tenants', tenantRoutes);
 app.use('/api/properties', propertyRoutes);
 app.use('/api/search', searchRoutes);
 app.use('/api/projects', projectRouter);

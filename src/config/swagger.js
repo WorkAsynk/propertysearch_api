@@ -83,6 +83,35 @@ const options = {
             created_at: { type: 'string', format: 'date-time' },
           },
         },
+        Tenant: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            name: { type: 'string', example: 'Skyline Realty' },
+            slug: { type: 'string', example: 'skyline-realty' },
+            status: { type: 'string', enum: ['active', 'inactive'], example: 'active' },
+            broker_count: { type: 'integer', example: 6 },
+            active_listing_count: { type: 'integer', example: 24 },
+            created_at: { type: 'string', format: 'date-time' },
+            updated_at: { type: 'string', format: 'date-time' },
+          },
+        },
+        TenantCreateRequest: {
+          type: 'object',
+          required: ['name'],
+          properties: {
+            name: { type: 'string', example: 'Skyline Realty' },
+            slug: { type: 'string', nullable: true, example: 'skyline-realty' },
+            status: { type: 'string', enum: ['active', 'inactive'], example: 'active' },
+          },
+        },
+        TenantUpdateRequest: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            status: { type: 'string', enum: ['active', 'inactive'] },
+          },
+        },
         PropertyMedia: {
           type: 'object',
           properties: {

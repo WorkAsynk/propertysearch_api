@@ -31,10 +31,26 @@ const STAGE_TRANSITIONS = {
 
 const TERMINAL_STAGES = ['closed_won', 'closed_lost'];
 
+// Every human-readable field a deal row needs for display - the deals table
+// itself only stores FK ids. Shared by listDeals/getDealById so the shape
+// returned to the frontend pipeline board is identical everywhere.
+const DEAL_SELECT = `
+  SELECT d.*,
+         c.full_name AS customer_name, c.email AS customer_email, c.mobile AS customer_mobile,
+         p.title AS property_title, p.city AS property_city,
+         un.unit_number AS unit_number,
+         broker.full_name AS broker_name
+  FROM deals d
+  LEFT JOIN customers c ON c.id = d.customer_id
+  LEFT JOIN properties p ON p.id = d.property_id
+  LEFT JOIN units un ON un.id = d.unit_id
+  LEFT JOIN users broker ON broker.id = d.broker_id
+`;
+
 function applyTenantScope(user, where, params) {
   if (isAdmin(user.role)) return;
   params.push(user.tenant_id || null, user.id);
-  where.push(`(tenant_id = $${params.length - 1} OR broker_id = $${params.length})`);
+  where.push(`(d.tenant_id = $${params.length - 1} OR d.broker_id = $${params.length})`);
 }
 
 async function listDeals(user, filters, page, limit) {
@@ -45,31 +61,31 @@ async function listDeals(user, filters, page, limit) {
 
   if (filters.stage) {
     params.push(filters.stage);
-    where.push(`stage = $${params.length}`);
+    where.push(`d.stage = $${params.length}`);
   }
   if (filters.brokerId) {
     params.push(filters.brokerId);
-    where.push(`broker_id = $${params.length}`);
+    where.push(`d.broker_id = $${params.length}`);
   }
   if (filters.dateFrom) {
     params.push(filters.dateFrom);
-    where.push(`created_at >= $${params.length}`);
+    where.push(`d.created_at >= $${params.length}`);
   }
   if (filters.dateTo) {
     params.push(filters.dateTo);
-    where.push(`created_at <= $${params.length}`);
+    where.push(`d.created_at <= $${params.length}`);
   }
 
   const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const offset = (page - 1) * limit;
 
-  const countResult = await pool.query(`SELECT COUNT(*) FROM deals ${whereClause}`, params);
+  const countResult = await pool.query(`SELECT COUNT(*) FROM deals d ${whereClause}`, params);
 
   params.push(limit, offset);
   const result = await pool.query(
-    `SELECT * FROM deals
+    `${DEAL_SELECT}
      ${whereClause}
-     ORDER BY created_at DESC
+     ORDER BY d.created_at DESC
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   );
@@ -86,7 +102,7 @@ async function listDeals(user, filters, page, limit) {
 }
 
 async function getDealById(id) {
-  const result = await pool.query('SELECT * FROM deals WHERE id = $1', [id]);
+  const result = await pool.query(`${DEAL_SELECT} WHERE d.id = $1`, [id]);
   const deal = result.rows[0];
   if (!deal) throw notFound();
 
