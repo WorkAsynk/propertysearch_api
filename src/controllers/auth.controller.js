@@ -62,6 +62,39 @@ async function login(req, res, next) {
   }
 }
 
+// POST /api/auth/google
+async function googleLogin(req, res, next) {
+  try {
+    const { idToken, allowSelfRegister } = req.body;
+
+    const payload = await authService.verifyGoogleIdToken(idToken);
+    const user = await authService.loginWithGoogle(payload, !!allowSelfRegister);
+
+    const tokenPayload = { id: user.id, role: user.role_name, tenant_id: user.tenant_id };
+    const accessToken = generateAccessToken(tokenPayload);
+    const refreshToken = generateRefreshToken(tokenPayload);
+
+    const decodedRefresh = require('jsonwebtoken').decode(refreshToken);
+    await authService.storeRefreshToken(user.id, refreshToken, new Date(decodedRefresh.exp * 1000));
+    await authService.updateLastLogin(user.id);
+
+    return success(res, 200, 'Google login successful', {
+      accessToken,
+      refreshToken,
+      user: {
+        id: user.id,
+        fullName: user.full_name,
+        email: user.email,
+        mobile: user.mobile,
+        role: user.role_name,
+        tenantId: user.tenant_id,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 // POST /api/auth/otp/send
 async function sendOtp(req, res, next) {
   try {
@@ -251,6 +284,7 @@ async function activateUser(req, res, next) {
 module.exports = {
   register,
   login,
+  googleLogin,
   sendOtp,
   verifyOtp,
   refreshToken,

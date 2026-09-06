@@ -178,6 +178,56 @@ router.post(
 
 /**
  * @swagger
+ * /auth/google:
+ *   post:
+ *     summary: Login (or, with allowSelfRegister, sign up) with a Google ID token
+ *     description: >
+ *       Verifies the ID token from Google Identity Services against
+ *       GOOGLE_CLIENT_ID, then finds the user by the token's email. If none
+ *       exists and `allowSelfRegister` is true, creates one as `customer`
+ *       (matching public /auth/register self-signup - always `customer`,
+ *       never any other role) with `email_verified` already true. If
+ *       `allowSelfRegister` is false/omitted and no account exists, this is
+ *       login-only and returns 404 - intended for the CRM dashboard, where
+ *       accounts are provisioned by an admin, not self-service.
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [idToken]
+ *             properties:
+ *               idToken:
+ *                 type: string
+ *                 description: The ID token (JWT credential) returned by Google Identity Services
+ *               allowSelfRegister:
+ *                 type: boolean
+ *                 default: false
+ *                 description: true on the public website (login-or-signup); false/omitted on the CRM dashboard (login-only)
+ *     responses:
+ *       200:
+ *         description: Login successful, returns access & refresh tokens
+ *       401:
+ *         description: Invalid or expired Google token
+ *       403:
+ *         description: Account not active
+ *       404:
+ *         description: No account found with this Google email (allowSelfRegister was false)
+ */
+router.post(
+  '/google',
+  [
+    body('idToken').notEmpty().withMessage('idToken is required'),
+    body('allowSelfRegister').optional().isBoolean(),
+  ],
+  validate,
+  authController.googleLogin
+);
+
+/**
+ * @swagger
  * /auth/otp/send:
  *   post:
  *     summary: Send OTP to email or mobile

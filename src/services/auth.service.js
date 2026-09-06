@@ -1,9 +1,12 @@
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
+const { OAuth2Client } = require('google-auth-library');
 const pool = require('../config/db');
 const { generateOtp, getOtpExpiry } = require('../utils/otp');
 const msg91Service = require('./msg91.service');
 const { uploadBuffer, deleteObject, getReadUrl } = require('../utils/storage');
+
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 // Roles that can always self-register through /auth/register with no token.
 const PUBLIC_SELF_REGISTER_ROLES = ['customer', 'broker'];
@@ -202,6 +205,75 @@ async function registerUser({ fullName, email, mobile, password, role, tenantId 
   return { ...result.rows[0], role };
 }
 
+// Verifies the ID token's signature, expiry and audience (must match our own
+// OAuth Client ID, so a token minted for a different app can't be replayed
+// here) against Google's public keys, and returns its decoded payload
+// (email, name, email_verified, ...).
+async function verifyGoogleIdToken(idToken) {
+  if (!idToken) {
+    const err = new Error('idToken is required');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!process.env.GOOGLE_CLIENT_ID) {
+    const err = new Error('Google login is not configured (missing GOOGLE_CLIENT_ID)');
+    err.statusCode = 500;
+    throw err;
+  }
+
+  try {
+    const ticket = await googleClient.verifyIdToken({
+      idToken,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+    return ticket.getPayload();
+  } catch (e) {
+    const err = new Error('Invalid or expired Google token');
+    err.statusCode = 401;
+    throw err;
+  }
+}
+
+// Finds the user matching a verified Google account's email, or - only when
+// allowSelfRegister is true (the public website; the CRM dashboard passes
+// false, login-only) - creates one as 'customer', mirroring the public
+// /auth/register self-signup path. Google already verified the email, so
+// the new account is marked email_verified immediately and never gets a
+// password_hash (only Google/OTP can ever log into it, same as an
+// OTP-only account).
+async function loginWithGoogle(googlePayload, allowSelfRegister) {
+  const { email, name, email_verified } = googlePayload;
+  if (!email) {
+    const err = new Error('This Google account has no email address');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  let user = await findUserByEmailOrMobile(email);
+
+  if (!user) {
+    if (!allowSelfRegister) {
+      const err = new Error('No account found with this Google email');
+      err.statusCode = 404;
+      throw err;
+    }
+
+    const roleRecord = await getRoleByName('customer');
+    await pool.query(
+      `INSERT INTO users (tenant_id, role_id, full_name, email, password_hash, status, email_verified)
+       VALUES (NULL, $1, $2, $3, NULL, 'active', $4)`,
+      [roleRecord.id, name || email.split('@')[0], email, !!email_verified]
+    );
+    user = await findUserByEmailOrMobile(email);
+  } else if (user.status !== 'active') {
+    const err = new Error(`Account is ${user.status.replace('_', ' ')}. Please contact admin.`);
+    err.statusCode = 403;
+    throw err;
+  }
+
+  return user;
+}
+
 async function validatePassword(user, password) {
   if (!user.password_hash) return false;
   return bcrypt.compare(password, user.password_hash);
@@ -364,6 +436,8 @@ module.exports = {
   uploadProfilePicture,
   activateUser,
   registerUser,
+  verifyGoogleIdToken,
+  loginWithGoogle,
   validatePassword,
   updateLastLogin,
   createOtp,
