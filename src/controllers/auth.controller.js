@@ -65,10 +65,10 @@ async function login(req, res, next) {
 // POST /api/auth/google
 async function googleLogin(req, res, next) {
   try {
-    const { idToken, allowSelfRegister } = req.body;
+    const { idToken, allowSelfRegister, role, tenantId } = req.body;
 
     const payload = await authService.verifyGoogleIdToken(idToken);
-    const user = await authService.loginWithGoogle(payload, !!allowSelfRegister);
+    const user = await authService.loginWithGoogle(payload, !!allowSelfRegister, role, tenantId);
 
     const tokenPayload = { id: user.id, role: user.role_name, tenant_id: user.tenant_id };
     const accessToken = generateAccessToken(tokenPayload);

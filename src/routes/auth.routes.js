@@ -184,12 +184,17 @@ router.post(
  *     description: >
  *       Verifies the ID token from Google Identity Services against
  *       GOOGLE_CLIENT_ID, then finds the user by the token's email. If none
- *       exists and `allowSelfRegister` is true, creates one as `customer`
- *       (matching public /auth/register self-signup - always `customer`,
- *       never any other role) with `email_verified` already true. If
+ *       exists and `allowSelfRegister` is true, creates one as `role`
+ *       (default `customer` if omitted) with `email_verified` taken from
+ *       Google's own claim. Any role except `super_admin` may self-register
+ *       this way with no bearer token - deliberately more permissive than
+ *       /auth/register's ROLE_CREATION_PERMISSIONS gate for admin/
+ *       agency_admin/builder/internal_sales, since a verified Google
+ *       identity is considered sufficient here. `broker` still starts
+ *       `pending_approval`, same as through /auth/register. If
  *       `allowSelfRegister` is false/omitted and no account exists, this is
- *       login-only and returns 404 - intended for the CRM dashboard, where
- *       accounts are provisioned by an admin, not self-service.
+ *       login-only and returns 404 - used by the CRM dashboard's Login page
+ *       (its Register page passes allowSelfRegister: true instead).
  *     tags: [Authentication]
  *     requestBody:
  *       required: true
@@ -205,14 +210,24 @@ router.post(
  *               allowSelfRegister:
  *                 type: boolean
  *                 default: false
- *                 description: true on the public website (login-or-signup); false/omitted on the CRM dashboard (login-only)
+ *                 description: true to allow first-time sign-in to create an account (public website always; CRM dashboard's Register page); false/omitted is login-only (CRM dashboard's Login page)
+ *               role:
+ *                 type: string
+ *                 enum: [customer, broker, agency_admin, builder, internal_sales, admin]
+ *                 default: customer
+ *                 description: Only used the first time a given Google email signs in (allowSelfRegister true) - ignored for an existing account. super_admin is never allowed here.
+ *               tenantId:
+ *                 type: string
+ *                 format: uuid
+ *                 nullable: true
+ *                 description: Only used on first self-registration, same as /auth/register
  *     responses:
  *       200:
  *         description: Login successful, returns access & refresh tokens
  *       401:
  *         description: Invalid or expired Google token
  *       403:
- *         description: Account not active
+ *         description: Account not active, or role is not self-registerable via Google (e.g. super_admin)
  *       404:
  *         description: No account found with this Google email (allowSelfRegister was false)
  */
@@ -221,6 +236,9 @@ router.post(
   [
     body('idToken').notEmpty().withMessage('idToken is required'),
     body('allowSelfRegister').optional().isBoolean(),
+    // super_admin is intentionally excluded - loginWithGoogle() also
+    // rejects it explicitly, this just gives a cleaner 422 up front.
+    body('role').optional().isIn(['customer', 'broker', 'agency_admin', 'builder', 'internal_sales', 'admin']),
   ],
   validate,
   authController.googleLogin

@@ -234,14 +234,24 @@ async function verifyGoogleIdToken(idToken) {
   }
 }
 
+// Roles Google sign-up may self-register as - every role except
+// super_admin. Unlike /auth/register (which gates admin/agency_admin/
+// builder/internal_sales behind an existing admin's bearer token via
+// ROLE_CREATION_PERMISSIONS), a verified Google account may self-register
+// as any of these directly, no token required - by design, per product
+// decision. super_admin stays blocked unconditionally; there is no
+// Google-based bootstrap path for it.
+const GOOGLE_SELF_REGISTER_ROLES = ['customer', 'broker', 'agency_admin', 'builder', 'internal_sales', 'admin'];
+
 // Finds the user matching a verified Google account's email, or - only when
-// allowSelfRegister is true (the public website; the CRM dashboard passes
-// false, login-only) - creates one as 'customer', mirroring the public
-// /auth/register self-signup path. Google already verified the email, so
-// the new account is marked email_verified immediately and never gets a
-// password_hash (only Google/OTP can ever log into it, same as an
-// OTP-only account).
-async function loginWithGoogle(googlePayload, allowSelfRegister) {
+// allowSelfRegister is true (the public website always passes true; the CRM
+// dashboard passes true from its Register page and false/omitted from its
+// login-only Login page) - creates one as `role` (default 'customer' if
+// omitted, e.g. the website's login-page Google button). Google already
+// verified the email, so the new account is marked email_verified from
+// Google's own claim and never gets a password_hash (only Google/OTP can
+// ever log into it, same as an OTP-only account).
+async function loginWithGoogle(googlePayload, allowSelfRegister, role, tenantId) {
   const { email, name, email_verified } = googlePayload;
   if (!email) {
     const err = new Error('This Google account has no email address');
@@ -258,11 +268,31 @@ async function loginWithGoogle(googlePayload, allowSelfRegister) {
       throw err;
     }
 
-    const roleRecord = await getRoleByName('customer');
+    const targetRole = role || 'customer';
+    if (!GOOGLE_SELF_REGISTER_ROLES.includes(targetRole)) {
+      const err = new Error(`Cannot self-register a '${targetRole}' account via Google`);
+      err.statusCode = 403;
+      throw err;
+    }
+
+    const roleRecord = await getRoleByName(targetRole);
+    if (!roleRecord) {
+      const err = new Error('Invalid role specified');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    // Mirrors registerUser()'s status rule: brokers still need an
+    // agency_admin/admin to activate them; every other self-registerable
+    // role (including agency_admin/builder/internal_sales/admin here,
+    // deliberately more permissive than the token-gated /auth/register
+    // path) goes active immediately.
+    const status = targetRole === 'broker' ? 'pending_approval' : 'active';
+
     await pool.query(
       `INSERT INTO users (tenant_id, role_id, full_name, email, password_hash, status, email_verified)
-       VALUES (NULL, $1, $2, $3, NULL, 'active', $4)`,
-      [roleRecord.id, name || email.split('@')[0], email, !!email_verified]
+       VALUES ($1, $2, $3, $4, NULL, $5, $6)`,
+      [tenantId || null, roleRecord.id, name || email.split('@')[0], email, status, !!email_verified]
     );
     user = await findUserByEmailOrMobile(email);
   } else if (user.status !== 'active') {
