@@ -164,6 +164,71 @@ projectRouter.put(
 
 /**
  * @swagger
+ * /projects/{id}:
+ *   delete:
+ *     summary: Delete a project
+ *     description: Only the project's builder or admin/super_admin may delete.
+ *     tags: [Projects]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Project deleted successfully
+ *       403:
+ *         description: Not the owner/admin
+ *       404:
+ *         description: Project not found
+ */
+projectRouter.delete(
+  '/:id',
+  authenticate,
+  [param('id').isUUID().withMessage('Invalid project id')],
+  validate,
+  projectController.deleteProject
+);
+
+/**
+ * @swagger
+ * /projects/bulk-delete:
+ *   post:
+ *     summary: Delete multiple projects at once
+ *     description: Runs the same per-project ownership check as DELETE /projects/{id} for each id - ids that fail that check are skipped and reported back, not treated as a fatal error for the whole batch.
+ *     tags: [Projects]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [ids]
+ *             properties:
+ *               ids:
+ *                 type: array
+ *                 items: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Returns deletedCount, deletedIds, and failed (array of {id, reason})
+ */
+projectRouter.post(
+  '/bulk-delete',
+  authenticate,
+  [
+    body('ids').isArray({ min: 1 }).withMessage('ids must be a non-empty array'),
+    body('ids.*').isUUID().withMessage('Each id must be a valid UUID'),
+  ],
+  validate,
+  projectController.bulkDeleteProjects
+);
+
+/**
+ * @swagger
  * /projects/{id}/units:
  *   get:
  *     summary: List units within a project
@@ -326,6 +391,71 @@ unitRouter.put(
   ],
   validate,
   projectController.updateUnitStatus
+);
+
+/**
+ * @swagger
+ * /units/{id}:
+ *   delete:
+ *     summary: Delete a unit
+ *     description: Only the parent project's builder or admin/super_admin may delete.
+ *     tags: [Units]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Unit deleted successfully
+ *       403:
+ *         description: Not the project owner/admin
+ *       404:
+ *         description: Unit not found
+ */
+unitRouter.delete(
+  '/:id',
+  authenticate,
+  [param('id').isUUID().withMessage('Invalid unit id')],
+  validate,
+  projectController.deleteUnit
+);
+
+/**
+ * @swagger
+ * /units/bulk-delete:
+ *   post:
+ *     summary: Delete multiple units at once
+ *     description: Runs the same per-unit ownership check as DELETE /units/{id} for each id - ids that fail that check are skipped and reported back, not treated as a fatal error for the whole batch.
+ *     tags: [Units]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [ids]
+ *             properties:
+ *               ids:
+ *                 type: array
+ *                 items: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Returns deletedCount, deletedIds, and failed (array of {id, reason})
+ */
+unitRouter.post(
+  '/bulk-delete',
+  authenticate,
+  [
+    body('ids').isArray({ min: 1 }).withMessage('ids must be a non-empty array'),
+    body('ids.*').isUUID().withMessage('Each id must be a valid UUID'),
+  ],
+  validate,
+  projectController.bulkDeleteUnits
 );
 
 module.exports = { projectRouter, unitRouter };

@@ -236,6 +236,71 @@ router.put(
 
 /**
  * @swagger
+ * /leads/{id}:
+ *   delete:
+ *     summary: Delete a lead
+ *     description: Only the lead's creator, its assignee, an agency_admin within the same tenant, or admin/super_admin may delete.
+ *     tags: [Leads]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Lead deleted successfully
+ *       403:
+ *         description: Not the creator/assignee/tenant manager/admin
+ *       404:
+ *         description: Lead not found
+ */
+router.delete(
+  '/:id',
+  authenticate,
+  [param('id').isUUID().withMessage('Invalid lead id')],
+  validate,
+  leadController.deleteLead
+);
+
+/**
+ * @swagger
+ * /leads/bulk-delete:
+ *   post:
+ *     summary: Delete multiple leads at once
+ *     description: Runs the same per-lead ownership check as DELETE /leads/{id} for each id - ids that fail that check are skipped and reported back, not treated as a fatal error for the whole batch.
+ *     tags: [Leads]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [ids]
+ *             properties:
+ *               ids:
+ *                 type: array
+ *                 items: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Returns deletedCount, deletedIds, and failed (array of {id, reason})
+ */
+router.post(
+  '/bulk-delete',
+  authenticate,
+  [
+    body('ids').isArray({ min: 1 }).withMessage('ids must be a non-empty array'),
+    body('ids.*').isUUID().withMessage('Each id must be a valid UUID'),
+  ],
+  validate,
+  leadController.bulkDeleteLeads
+);
+
+/**
+ * @swagger
  * /leads/{id}/assign:
  *   put:
  *     summary: Assign or reassign a lead to a user

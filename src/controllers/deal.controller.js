@@ -1,6 +1,7 @@
 const dealService = require('../services/deal.service');
 const { success } = require('../utils/response');
 const { assertOwnerOrAdmin, assertTenantVisible } = require('../utils/ownership');
+const { bulkDelete } = require('../utils/bulkDelete');
 
 const DEAL_OWNER_FIELDS = ['broker_id'];
 
@@ -56,6 +57,35 @@ async function updateDeal(req, res, next) {
 
     const deal = await dealService.updateDeal(req.params.id, req.body);
     return success(res, 200, 'Deal updated successfully', deal);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function deleteOneDeal(id, actingUser) {
+  const existing = await dealService.getDealById(id);
+  assertOwnerOrAdmin(actingUser, existing, {
+    allowTenantManagers: ['agency_admin'],
+    ownerFields: DEAL_OWNER_FIELDS,
+  });
+  await dealService.deleteDeal(id);
+}
+
+// DELETE /api/deals/:id
+async function deleteDeal(req, res, next) {
+  try {
+    await deleteOneDeal(req.params.id, req.user);
+    return success(res, 200, 'Deal deleted successfully');
+  } catch (err) {
+    next(err);
+  }
+}
+
+// POST /api/deals/bulk-delete
+async function bulkDeleteDeals(req, res, next) {
+  try {
+    const result = await bulkDelete(req.body.ids, (id) => deleteOneDeal(id, req.user));
+    return success(res, 200, `${result.deletedCount} deal(s) deleted`, result);
   } catch (err) {
     next(err);
   }
@@ -162,6 +192,8 @@ module.exports = {
   getDeal,
   createDeal,
   updateDeal,
+  deleteDeal,
+  bulkDeleteDeals,
   changeStage,
   scheduleSiteVisit,
   updateSiteVisit,

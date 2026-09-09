@@ -175,4 +175,40 @@ router.delete(
   tenantController.deleteTenant
 );
 
+/**
+ * @swagger
+ * /tenants/bulk-delete:
+ *   post:
+ *     summary: Delete multiple agencies at once
+ *     description: Runs the same permission check as DELETE /tenants/{id} for each id - ids that fail that check are skipped and reported back, not treated as a fatal error for the whole batch.
+ *     tags: [Agencies]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [ids]
+ *             properties:
+ *               ids:
+ *                 type: array
+ *                 items: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Returns deletedCount, deletedIds, and failed (array of {id, reason})
+ */
+router.post(
+  '/bulk-delete',
+  authenticate,
+  authorize(...MANAGE_ROLES),
+  [
+    body('ids').isArray({ min: 1 }).withMessage('ids must be a non-empty array'),
+    body('ids.*').isUUID().withMessage('Each id must be a valid UUID'),
+  ],
+  validate,
+  tenantController.bulkDeleteTenants
+);
+
 module.exports = router;

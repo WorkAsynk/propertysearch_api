@@ -1,8 +1,18 @@
 const leadService = require('../services/lead.service');
 const { success } = require('../utils/response');
 const { assertOwnerOrAdmin, assertTenantVisible } = require('../utils/ownership');
+const { bulkDelete } = require('../utils/bulkDelete');
 
 const LEAD_OWNER_FIELDS = ['created_by', 'assigned_to'];
+
+async function deleteOneLead(id, actingUser) {
+  const existing = await leadService.getLeadById(id);
+  assertOwnerOrAdmin(actingUser, existing, {
+    allowTenantManagers: ['agency_admin'],
+    ownerFields: LEAD_OWNER_FIELDS,
+  });
+  await leadService.deleteLead(id);
+}
 
 // GET /api/leads
 async function listLeads(req, res, next) {
@@ -67,6 +77,26 @@ async function updateLead(req, res, next) {
 
     const lead = await leadService.updateLead(req.params.id, req.body);
     return success(res, 200, 'Lead updated successfully', lead);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// DELETE /api/leads/:id
+async function deleteLead(req, res, next) {
+  try {
+    await deleteOneLead(req.params.id, req.user);
+    return success(res, 200, 'Lead deleted successfully');
+  } catch (err) {
+    next(err);
+  }
+}
+
+// POST /api/leads/bulk-delete
+async function bulkDeleteLeads(req, res, next) {
+  try {
+    const result = await bulkDelete(req.body.ids, (id) => deleteOneLead(id, req.user));
+    return success(res, 200, `${result.deletedCount} lead(s) deleted`, result);
   } catch (err) {
     next(err);
   }
@@ -147,6 +177,8 @@ module.exports = {
   createLead,
   createPublicInquiry,
   updateLead,
+  deleteLead,
+  bulkDeleteLeads,
   assignLead,
   updateStatus,
   addNote,

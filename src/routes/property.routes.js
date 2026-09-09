@@ -227,6 +227,41 @@ router.delete(
 
 /**
  * @swagger
+ * /properties/bulk-delete:
+ *   post:
+ *     summary: Delete multiple property listings at once
+ *     description: Runs the same per-listing ownership check as DELETE /properties/{id} for each id - ids that fail that check are skipped and reported back, not treated as a fatal error for the whole batch.
+ *     tags: [Properties]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [ids]
+ *             properties:
+ *               ids:
+ *                 type: array
+ *                 items: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Returns deletedCount, deletedIds, and failed (array of {id, reason})
+ */
+router.post(
+  '/bulk-delete',
+  authenticate,
+  [
+    body('ids').isArray({ min: 1 }).withMessage('ids must be a non-empty array'),
+    body('ids.*').isUUID().withMessage('Each id must be a valid UUID'),
+  ],
+  validate,
+  propertyController.bulkDeleteProperties
+);
+
+/**
+ * @swagger
  * /properties/{id}/media:
  *   post:
  *     summary: Attach media (images/videos) to a property via pre-hosted URLs

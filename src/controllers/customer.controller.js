@@ -1,6 +1,13 @@
 const customerService = require('../services/customer.service');
 const { success } = require('../utils/response');
 const { assertOwnerOrAdmin, assertTenantVisible } = require('../utils/ownership');
+const { bulkDelete } = require('../utils/bulkDelete');
+
+async function deleteOneCustomer(id, actingUser) {
+  const existing = await customerService.getCustomerById(id);
+  assertOwnerOrAdmin(actingUser, existing, { allowTenantManagers: ['agency_admin'] });
+  await customerService.deleteCustomer(id);
+}
 
 // GET /api/customers
 async function listCustomers(req, res, next) {
@@ -45,6 +52,26 @@ async function updateCustomer(req, res, next) {
 
     const customer = await customerService.updateCustomer(req.params.id, req.body);
     return success(res, 200, 'Customer updated successfully', customer);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// DELETE /api/customers/:id
+async function deleteCustomer(req, res, next) {
+  try {
+    await deleteOneCustomer(req.params.id, req.user);
+    return success(res, 200, 'Customer deleted successfully');
+  } catch (err) {
+    next(err);
+  }
+}
+
+// POST /api/customers/bulk-delete
+async function bulkDeleteCustomers(req, res, next) {
+  try {
+    const result = await bulkDelete(req.body.ids, (id) => deleteOneCustomer(id, req.user));
+    return success(res, 200, `${result.deletedCount} customer(s) deleted`, result);
   } catch (err) {
     next(err);
   }
@@ -133,6 +160,8 @@ module.exports = {
   getCustomer,
   createCustomer,
   updateCustomer,
+  deleteCustomer,
+  bulkDeleteCustomers,
   getPreferences,
   upsertPreferences,
   getDocuments,

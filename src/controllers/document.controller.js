@@ -1,8 +1,15 @@
 const documentService = require('../services/document.service');
 const { success } = require('../utils/response');
 const { assertOwnerOrAdmin, assertTenantVisible } = require('../utils/ownership');
+const { bulkDelete } = require('../utils/bulkDelete');
 
 const DOCUMENT_OWNER_FIELDS = ['uploaded_by'];
+
+async function deleteOneDocument(id, actingUser) {
+  const existing = await documentService.getDocumentById(id);
+  assertOwnerOrAdmin(actingUser, existing, { ownerFields: DOCUMENT_OWNER_FIELDS });
+  await documentService.deleteDocument(id);
+}
 
 // GET /api/documents
 async function listDocuments(req, res, next) {
@@ -64,12 +71,19 @@ async function updateDocument(req, res, next) {
 // DELETE /api/documents/:id
 async function deleteDocument(req, res, next) {
   try {
-    const existing = await documentService.getDocumentById(req.params.id);
     // Explicitly "owner or admin only" - no tenant-manager carve-out here.
-    assertOwnerOrAdmin(req.user, existing, { ownerFields: DOCUMENT_OWNER_FIELDS });
-
-    await documentService.deleteDocument(req.params.id);
+    await deleteOneDocument(req.params.id, req.user);
     return success(res, 200, 'Document deleted successfully');
+  } catch (err) {
+    next(err);
+  }
+}
+
+// POST /api/documents/bulk-delete
+async function bulkDeleteDocuments(req, res, next) {
+  try {
+    const result = await bulkDelete(req.body.ids, (id) => deleteOneDocument(id, req.user));
+    return success(res, 200, `${result.deletedCount} document(s) deleted`, result);
   } catch (err) {
     next(err);
   }
@@ -112,6 +126,7 @@ module.exports = {
   createDocument,
   updateDocument,
   deleteDocument,
+  bulkDeleteDocuments,
   getByCustomer,
   getByDeal,
   reviewDocument,

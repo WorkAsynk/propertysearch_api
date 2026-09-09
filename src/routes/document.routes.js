@@ -253,6 +253,41 @@ router.delete(
 
 /**
  * @swagger
+ * /documents/bulk-delete:
+ *   post:
+ *     summary: Delete multiple documents at once
+ *     description: Runs the same per-document ownership check as DELETE /documents/{id} for each id (owner or admin only, no tenant-manager carve-out) - ids that fail that check are skipped and reported back, not treated as a fatal error for the whole batch.
+ *     tags: [Documents]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [ids]
+ *             properties:
+ *               ids:
+ *                 type: array
+ *                 items: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Returns deletedCount, deletedIds, and failed (array of {id, reason})
+ */
+router.post(
+  '/bulk-delete',
+  authenticate,
+  [
+    body('ids').isArray({ min: 1 }).withMessage('ids must be a non-empty array'),
+    body('ids.*').isUUID().withMessage('Each id must be a valid UUID'),
+  ],
+  validate,
+  documentController.bulkDeleteDocuments
+);
+
+/**
+ * @swagger
  * /documents/{id}/review:
  *   put:
  *     summary: Approve or reject a document

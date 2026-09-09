@@ -70,7 +70,7 @@ async function findUserById(id) {
             u.role_id, r.name AS role_name, r.description AS role_description,
             u.full_name, u.email, u.mobile, u.status,
             u.email_verified, u.mobile_verified, u.profile_picture_url,
-            u.created_by, u.last_login_at, u.created_at, u.updated_at
+            u.created_by, u.signup_source, u.last_login_at, u.created_at, u.updated_at
      FROM users u
      JOIN roles r ON r.id = u.role_id
      LEFT JOIN tenants t ON t.id = u.tenant_id
@@ -196,11 +196,18 @@ async function registerUser({ fullName, email, mobile, password, role, tenantId 
 
   const passwordHash = password ? await bcrypt.hash(password, 10) : null;
 
+  // A bearer token present at all (regardless of which role is being
+  // created) means staff registered this account on someone's behalf -
+  // /auth/register's token is optional only for customer/broker, so this
+  // still correctly reads as 'self_registration' for the normal public
+  // signup case where no token was sent.
+  const signupSource = actingUser ? 'admin_created' : 'self_registration';
+
   const result = await pool.query(
-    `INSERT INTO users (tenant_id, role_id, full_name, email, mobile, password_hash, status, email_verified)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-     RETURNING id, tenant_id, full_name, email, mobile, status, created_at`,
-    [tenantId || null, roleRecord.id, fullName, email || null, mobile || null, passwordHash, status, emailVerified]
+    `INSERT INTO users (tenant_id, role_id, full_name, email, mobile, password_hash, status, email_verified, signup_source)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING id, tenant_id, full_name, email, mobile, status, signup_source, created_at`,
+    [tenantId || null, roleRecord.id, fullName, email || null, mobile || null, passwordHash, status, emailVerified, signupSource]
   );
   const newUser = result.rows[0];
 
@@ -302,8 +309,8 @@ async function loginWithGoogle(googlePayload, allowSelfRegister, role, tenantId)
 
     const fullName = name || email.split('@')[0];
     await pool.query(
-      `INSERT INTO users (tenant_id, role_id, full_name, email, password_hash, status, email_verified)
-       VALUES ($1, $2, $3, $4, NULL, $5, $6)`,
+      `INSERT INTO users (tenant_id, role_id, full_name, email, password_hash, status, email_verified, signup_source)
+       VALUES ($1, $2, $3, $4, NULL, $5, $6, 'google')`,
       [tenantId || null, roleRecord.id, fullName, email, status, !!email_verified]
     );
     user = await findUserByEmailOrMobile(email);

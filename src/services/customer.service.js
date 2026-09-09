@@ -15,10 +15,12 @@ function badRequest(message) {
 }
 
 const CUSTOMER_SELECT = `
-  SELECT c.*, t.name AS tenant_name, creator.full_name AS created_by_name
+  SELECT c.*, t.name AS tenant_name, creator.full_name AS created_by_name,
+         account.signup_source AS account_signup_source, account.status AS account_status
   FROM customers c
   LEFT JOIN tenants t ON t.id = c.tenant_id
   LEFT JOIN users creator ON creator.id = c.created_by
+  LEFT JOIN users account ON account.id = c.user_id
 `;
 
 function applyTenantScope(user, where, params) {
@@ -246,12 +248,18 @@ async function getCustomerDeals(user, customerId) {
   return result.rows;
 }
 
+async function deleteCustomer(id) {
+  const result = await pool.query('DELETE FROM customers WHERE id = $1 RETURNING id', [id]);
+  if (result.rows.length === 0) throw notFound();
+}
+
 module.exports = {
   listCustomers,
   getCustomerById,
   createCustomer,
   findOrCreateCustomerByContact,
   updateCustomer,
+  deleteCustomer,
   getPreferences,
   upsertPreferences,
   getDocuments,

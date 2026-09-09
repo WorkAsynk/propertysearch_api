@@ -1,6 +1,7 @@
 const propertyService = require('../services/property.service');
 const { success, error } = require('../utils/response');
 const { assertOwnerOrAdmin, assertTenantVisible } = require('../utils/ownership');
+const { bulkDelete } = require('../utils/bulkDelete');
 
 // GET /api/properties
 async function listProperties(req, res, next) {
@@ -65,13 +66,26 @@ async function updateProperty(req, res, next) {
 }
 
 // DELETE /api/properties/:id
+async function deleteOneProperty(id, actingUser) {
+  const existing = await propertyService.getPropertyById(id);
+  assertOwnerOrAdmin(actingUser, existing, { allowTenantManagers: ['agency_admin'] });
+  await propertyService.deleteProperty(id);
+}
+
 async function deleteProperty(req, res, next) {
   try {
-    const existing = await propertyService.getPropertyById(req.params.id);
-    assertOwnerOrAdmin(req.user, existing, { allowTenantManagers: ['agency_admin'] });
-
-    await propertyService.deleteProperty(req.params.id);
+    await deleteOneProperty(req.params.id, req.user);
     return success(res, 200, 'Property deleted successfully');
+  } catch (err) {
+    next(err);
+  }
+}
+
+// POST /api/properties/bulk-delete
+async function bulkDeleteProperties(req, res, next) {
+  try {
+    const result = await bulkDelete(req.body.ids, (id) => deleteOneProperty(id, req.user));
+    return success(res, 200, `${result.deletedCount} property(ies) deleted`, result);
   } catch (err) {
     next(err);
   }
@@ -201,6 +215,7 @@ module.exports = {
   createProperty,
   updateProperty,
   deleteProperty,
+  bulkDeleteProperties,
   addMedia,
   uploadMedia,
   deleteMedia,

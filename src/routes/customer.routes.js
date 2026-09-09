@@ -163,6 +163,71 @@ router.put(
 
 /**
  * @swagger
+ * /customers/{id}:
+ *   delete:
+ *     summary: Delete a customer record
+ *     description: Only the record's creator, an agency_admin within the same tenant, or admin/super_admin may delete.
+ *     tags: [Customers]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Customer deleted successfully
+ *       403:
+ *         description: Not the owner/tenant manager/admin
+ *       404:
+ *         description: Customer not found
+ */
+router.delete(
+  '/:id',
+  authenticate,
+  [param('id').isUUID().withMessage('Invalid customer id')],
+  validate,
+  customerController.deleteCustomer
+);
+
+/**
+ * @swagger
+ * /customers/bulk-delete:
+ *   post:
+ *     summary: Delete multiple customer records at once
+ *     description: Runs the same per-record ownership check as DELETE /customers/{id} for each id - ids that fail that check are skipped and reported back, not treated as a fatal error for the whole batch.
+ *     tags: [Customers]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [ids]
+ *             properties:
+ *               ids:
+ *                 type: array
+ *                 items: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Returns deletedCount, deletedIds, and failed (array of {id, reason})
+ */
+router.post(
+  '/bulk-delete',
+  authenticate,
+  [
+    body('ids').isArray({ min: 1 }).withMessage('ids must be a non-empty array'),
+    body('ids.*').isUUID().withMessage('Each id must be a valid UUID'),
+  ],
+  validate,
+  customerController.bulkDeleteCustomers
+);
+
+/**
+ * @swagger
  * /customers/{id}/preferences:
  *   get:
  *     summary: Get a customer's search/budget preferences

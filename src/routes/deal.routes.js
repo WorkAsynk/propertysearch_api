@@ -192,6 +192,71 @@ router.put(
 
 /**
  * @swagger
+ * /deals/{id}:
+ *   delete:
+ *     summary: Delete a deal
+ *     description: Only the assigned broker, an agency_admin within the same tenant, or admin/super_admin may delete.
+ *     tags: [Deals]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Deal deleted successfully
+ *       403:
+ *         description: Not the assigned broker/tenant manager/admin
+ *       404:
+ *         description: Deal not found
+ */
+router.delete(
+  '/:id',
+  authenticate,
+  [param('id').isUUID().withMessage('Invalid deal id')],
+  validate,
+  dealController.deleteDeal
+);
+
+/**
+ * @swagger
+ * /deals/bulk-delete:
+ *   post:
+ *     summary: Delete multiple deals at once
+ *     description: Runs the same per-deal ownership check as DELETE /deals/{id} for each id - ids that fail that check are skipped and reported back, not treated as a fatal error for the whole batch.
+ *     tags: [Deals]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [ids]
+ *             properties:
+ *               ids:
+ *                 type: array
+ *                 items: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Returns deletedCount, deletedIds, and failed (array of {id, reason})
+ */
+router.post(
+  '/bulk-delete',
+  authenticate,
+  [
+    body('ids').isArray({ min: 1 }).withMessage('ids must be a non-empty array'),
+    body('ids.*').isUUID().withMessage('Each id must be a valid UUID'),
+  ],
+  validate,
+  dealController.bulkDeleteDeals
+);
+
+/**
+ * @swagger
  * /deals/{id}/stage:
  *   put:
  *     summary: Move a deal to a new pipeline stage

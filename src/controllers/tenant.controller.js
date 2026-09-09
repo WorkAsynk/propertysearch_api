@@ -1,5 +1,6 @@
 const tenantService = require('../services/tenant.service');
 const { success } = require('../utils/response');
+const { bulkDelete } = require('../utils/bulkDelete');
 
 // GET /api/tenants
 async function listTenants(req, res, next) {
@@ -51,10 +52,21 @@ async function deleteTenant(req, res, next) {
   }
 }
 
+// POST /api/tenants/bulk-delete
+async function bulkDeleteTenants(req, res, next) {
+  try {
+    const result = await bulkDelete(req.body.ids, (id) => tenantService.deleteTenant(id));
+    return success(res, 200, `${result.deletedCount} agency(ies) deleted`, result);
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   listTenants,
   getTenant,
   createTenant,
   updateTenant,
   deleteTenant,
+  bulkDeleteTenants,
 };

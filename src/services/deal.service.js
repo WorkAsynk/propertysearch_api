@@ -302,11 +302,17 @@ async function closeDeal(dealId, { outcome, reason }, user) {
   return changeStage(dealId, toStage, user, reason);
 }
 
+async function deleteDeal(id) {
+  const result = await pool.query('DELETE FROM deals WHERE id = $1 RETURNING id', [id]);
+  if (result.rows.length === 0) throw notFound();
+}
+
 module.exports = {
   listDeals,
   getDealById,
   createDeal,
   updateDeal,
+  deleteDeal,
   changeStage,
   scheduleSiteVisit,
   updateSiteVisit,

@@ -226,14 +226,26 @@ async function updateUnitStatus(id, status) {
   return result.rows[0];
 }
 
+async function deleteProject(id) {
+  const result = await pool.query('DELETE FROM projects WHERE id = $1 RETURNING id', [id]);
+  if (result.rows.length === 0) throw notFound('Project not found');
+}
+
+async function deleteUnit(id) {
+  const result = await pool.query('DELETE FROM units WHERE id = $1 RETURNING id', [id]);
+  if (result.rows.length === 0) throw notFound('Unit not found');
+}
+
 module.exports = {
   listProjects,
   getProjectById,
   createProject,
   updateProject,
+  deleteProject,
   listUnits,
   createUnit,
   getUnitWithProject,
   updateUnit,
   updateUnitStatus,
+  deleteUnit,
 };

@@ -1,6 +1,7 @@
 const userService = require('../services/user.service');
 const authService = require('../services/auth.service');
 const { success } = require('../utils/response');
+const { bulkDelete } = require('../utils/bulkDelete');
 
 // POST /api/users - admin-side "create user" for any role, reusing the same
 // role-creation permission checks as public /auth/register (super_admin can
@@ -68,6 +69,16 @@ async function deleteUser(req, res, next) {
   }
 }
 
+// POST /api/users/bulk-delete
+async function bulkDeleteUsers(req, res, next) {
+  try {
+    const result = await bulkDelete(req.body.ids, (id) => userService.deleteUser(req.user, id));
+    return success(res, 200, `${result.deletedCount} user(s) deleted`, result);
+  } catch (err) {
+    next(err);
+  }
+}
+
 // PUT /api/users/:id/role
 async function changeRole(req, res, next) {
   try {
@@ -105,6 +116,7 @@ module.exports = {
   getUser,
   updateUser,
   deleteUser,
+  bulkDeleteUsers,
   changeRole,
   setPassword,
   updateOwnProfile,
