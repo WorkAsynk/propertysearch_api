@@ -87,23 +87,40 @@ async function createCustomer(data, user) {
   return getCustomerById(result.rows[0].id);
 }
 
-// Used by the lead public-inquiry flow: reuses an existing customer record
-// matched by email/mobile, or creates a new (tenant-less, staff-less) one.
-async function findOrCreateCustomerByContact({ fullName, email, mobile }) {
+// Used by the lead public-inquiry flow, and by a new self-registered
+// `customer` user account (registerUser/loginWithGoogle) - reuses an
+// existing customer record matched by email/mobile, or creates a new
+// (tenant-less, staff-less) one. `userId`, when given, links the customer
+// record to that login account - backfilled onto an existing match too, so
+// a customer record created earlier from a public inquiry (with no
+// account yet) gets linked the moment that same person signs up.
+async function findOrCreateCustomerByContact({ fullName, email, mobile, userId } = {}) {
+  let existing = null;
   if (email) {
-    const existing = await pool.query('SELECT * FROM customers WHERE email = $1 LIMIT 1', [email]);
-    if (existing.rows.length > 0) return existing.rows[0];
+    const result = await pool.query('SELECT * FROM customers WHERE email = $1 LIMIT 1', [email]);
+    existing = result.rows[0];
   }
-  if (mobile) {
-    const existing = await pool.query('SELECT * FROM customers WHERE mobile = $1 LIMIT 1', [mobile]);
-    if (existing.rows.length > 0) return existing.rows[0];
+  if (!existing && mobile) {
+    const result = await pool.query('SELECT * FROM customers WHERE mobile = $1 LIMIT 1', [mobile]);
+    existing = result.rows[0];
+  }
+
+  if (existing) {
+    if (userId && !existing.user_id) {
+      const updated = await pool.query(
+        'UPDATE customers SET user_id = $1 WHERE id = $2 RETURNING *',
+        [userId, existing.id]
+      );
+      return updated.rows[0];
+    }
+    return existing;
   }
 
   const result = await pool.query(
-    `INSERT INTO customers (full_name, email, mobile)
-     VALUES ($1, $2, $3)
+    `INSERT INTO customers (user_id, full_name, email, mobile)
+     VALUES ($1, $2, $3, $4)
      RETURNING *`,
-    [fullName, email || null, mobile || null]
+    [userId || null, fullName, email || null, mobile || null]
   );
   return result.rows[0];
 }

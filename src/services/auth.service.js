@@ -4,6 +4,7 @@ const { OAuth2Client } = require('google-auth-library');
 const pool = require('../config/db');
 const { generateOtp, getOtpExpiry } = require('../utils/otp');
 const msg91Service = require('./msg91.service');
+const customerService = require('./customer.service');
 const { uploadBuffer, deleteObject, getReadUrl } = require('../utils/storage');
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
@@ -201,8 +202,18 @@ async function registerUser({ fullName, email, mobile, password, role, tenantId 
      RETURNING id, tenant_id, full_name, email, mobile, status, created_at`,
     [tenantId || null, roleRecord.id, fullName, email || null, mobile || null, passwordHash, status, emailVerified]
   );
+  const newUser = result.rows[0];
 
-  return { ...result.rows[0], role };
+  // A `customer`-role login account and a CRM `customers` record are
+  // different things (see customer.service.js) - without this, someone who
+  // self-registers as a customer can log into the website but is invisible
+  // to brokers in the CRM's Customers list. Links/creates the matching
+  // customers row so they actually show up there.
+  if (role === 'customer') {
+    await customerService.findOrCreateCustomerByContact({ fullName, email, mobile, userId: newUser.id });
+  }
+
+  return { ...newUser, role };
 }
 
 // Verifies the ID token's signature, expiry and audience (must match our own
@@ -289,12 +300,20 @@ async function loginWithGoogle(googlePayload, allowSelfRegister, role, tenantId)
     // path) goes active immediately.
     const status = targetRole === 'broker' ? 'pending_approval' : 'active';
 
+    const fullName = name || email.split('@')[0];
     await pool.query(
       `INSERT INTO users (tenant_id, role_id, full_name, email, password_hash, status, email_verified)
        VALUES ($1, $2, $3, $4, NULL, $5, $6)`,
-      [tenantId || null, roleRecord.id, name || email.split('@')[0], email, status, !!email_verified]
+      [tenantId || null, roleRecord.id, fullName, email, status, !!email_verified]
     );
     user = await findUserByEmailOrMobile(email);
+
+    // Same reasoning as registerUser() - a customer-role login account and
+    // a CRM customers record are different things; without this a Google
+    // signup is invisible to brokers in the CRM's Customers list.
+    if (targetRole === 'customer') {
+      await customerService.findOrCreateCustomerByContact({ fullName, email, userId: user.id });
+    }
   } else if (user.status !== 'active') {
     const err = new Error(`Account is ${user.status.replace('_', ' ')}. Please contact admin.`);
     err.statusCode = 403;
