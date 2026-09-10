@@ -1,5 +1,5 @@
 const projectService = require('../services/project.service');
-const { success } = require('../utils/response');
+const { success, error } = require('../utils/response');
 const { assertOwnerOrAdmin, assertTenantVisible } = require('../utils/ownership');
 const { bulkDelete } = require('../utils/bulkDelete');
 
@@ -73,6 +73,63 @@ async function bulkDeleteProjects(req, res, next) {
   try {
     const result = await bulkDelete(req.body.ids, (id) => deleteOneProject(id, req.user));
     return success(res, 200, `${result.deletedCount} project(s) deleted`, result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// POST /api/projects/:id/media
+async function addMedia(req, res, next) {
+  try {
+    const existing = await projectService.getProjectById(req.params.id);
+    assertOwnerOrAdmin(req.user, existing);
+
+    const media = await projectService.addMedia(req.params.id, req.body.media);
+    return success(res, 201, 'Media attached successfully', media);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// POST /api/projects/:id/media/upload
+async function uploadMedia(req, res, next) {
+  try {
+    if (!req.file) return error(res, 400, 'A file is required (field name: file)');
+
+    const existing = await projectService.getProjectById(req.params.id);
+    assertOwnerOrAdmin(req.user, existing);
+
+    const media = await projectService.uploadMedia(req.params.id, req.file, {
+      isPrimary: req.body.isPrimary === 'true' || req.body.isPrimary === true,
+      displayOrder: Number(req.body.displayOrder) || 0,
+    });
+    return success(res, 201, 'Media uploaded successfully', media);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// DELETE /api/projects/:id/media/:mediaId
+async function deleteMedia(req, res, next) {
+  try {
+    const existing = await projectService.getProjectById(req.params.id);
+    assertOwnerOrAdmin(req.user, existing);
+
+    await projectService.deleteMedia(req.params.id, req.params.mediaId);
+    return success(res, 200, 'Media removed successfully');
+  } catch (err) {
+    next(err);
+  }
+}
+
+// PUT /api/projects/:id/media/:mediaId/primary
+async function setPrimaryMedia(req, res, next) {
+  try {
+    const existing = await projectService.getProjectById(req.params.id);
+    assertOwnerOrAdmin(req.user, existing);
+
+    const media = await projectService.setPrimaryMedia(req.params.id, req.params.mediaId);
+    return success(res, 200, 'Cover photo updated successfully', media);
   } catch (err) {
     next(err);
   }
@@ -163,6 +220,10 @@ module.exports = {
   updateProject,
   deleteProject,
   bulkDeleteProjects,
+  addMedia,
+  uploadMedia,
+  deleteMedia,
+  setPrimaryMedia,
   listUnits,
   createUnit,
   updateUnit,

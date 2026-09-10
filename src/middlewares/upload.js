@@ -20,6 +20,13 @@ const uploadPropertyMedia = multer({
   fileFilter: fileFilter([...IMAGE_TYPES, ...VIDEO_TYPES]),
 });
 
+// Project media: images or videos, up to 100MB - mirrors uploadPropertyMedia.
+const uploadProjectMedia = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 100 * 1024 * 1024 },
+  fileFilter: fileFilter([...IMAGE_TYPES, ...VIDEO_TYPES]),
+});
+
 // Profile pictures: images only, up to 5MB.
 const uploadProfilePicture = multer({
   storage: multer.memoryStorage(),
@@ -27,4 +34,4 @@ const uploadProfilePicture = multer({
   fileFilter: fileFilter(IMAGE_TYPES),
 });
 
-module.exports = { uploadPropertyMedia, uploadProfilePicture, IMAGE_TYPES, VIDEO_TYPES };
+module.exports = { uploadPropertyMedia, uploadProjectMedia, uploadProfilePicture, IMAGE_TYPES, VIDEO_TYPES };

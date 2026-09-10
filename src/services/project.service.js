@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const { isAdmin } = require('../utils/ownership');
+const { uploadBuffer, deleteObject, signUrls } = require('../utils/storage');
 
 function notFound(message) {
   const err = new Error(message);
@@ -70,11 +71,17 @@ async function getProjectById(id) {
   const result = await pool.query('SELECT * FROM projects WHERE id = $1', [id]);
   const project = result.rows[0];
   if (!project) throw notFound('Project not found');
-  return withOwnerShape(project);
+
+  const media = await pool.query(
+    'SELECT * FROM project_media WHERE project_id = $1 ORDER BY display_order ASC, created_at ASC',
+    [id]
+  );
+
+  return withOwnerShape({ ...project, media: await signUrls(media.rows, 'url') });
 }
 
 async function createProject(data, user) {
-  const { name, description, city, locality, address, builderId } = data;
+  const { name, description, city, locality, address, builderId, amenities, configurations } = data;
 
   const resolvedBuilderId = builderId || (user.role === 'builder' ? user.id : null);
   if (!resolvedBuilderId) {
@@ -82,8 +89,8 @@ async function createProject(data, user) {
   }
 
   const result = await pool.query(
-    `INSERT INTO projects (tenant_id, builder_id, name, description, city, locality, address, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 'draft')
+    `INSERT INTO projects (tenant_id, builder_id, name, description, city, locality, address, amenities, configurations, status)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'draft')
      RETURNING *`,
     [
       user.tenant_id || null,
@@ -93,6 +100,8 @@ async function createProject(data, user) {
       city,
       locality || null,
       address || null,
+      JSON.stringify(amenities || []),
+      JSON.stringify(configurations || []),
     ]
   );
 
@@ -118,6 +127,14 @@ async function updateProject(id, data) {
       set.push(`${column} = $${params.length}`);
     }
   }
+  if (data.amenities !== undefined) {
+    params.push(JSON.stringify(data.amenities));
+    set.push(`amenities = $${params.length}`);
+  }
+  if (data.configurations !== undefined) {
+    params.push(JSON.stringify(data.configurations));
+    set.push(`configurations = $${params.length}`);
+  }
 
   if (set.length === 0) throw badRequest('No updatable fields provided');
 
@@ -128,6 +145,79 @@ async function updateProject(id, data) {
   );
 
   return withOwnerShape(result.rows[0]);
+}
+
+async function addMedia(projectId, mediaItems) {
+  const inserted = [];
+  for (const item of mediaItems) {
+    const result = await pool.query(
+      `INSERT INTO project_media (project_id, media_type, url, display_order, is_primary)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [
+        projectId,
+        item.mediaType || 'image',
+        item.url,
+        item.displayOrder || 0,
+        item.isPrimary || false,
+      ]
+    );
+    inserted.push(result.rows[0]);
+  }
+  return signUrls(inserted, 'url');
+}
+
+// Uploads a single file straight to GCS (projects/<id>/images|videos/...)
+// and records the resulting object path in project_media - mirrors
+// property.service.js's uploadMedia.
+async function uploadMedia(projectId, file, options = {}) {
+  const mediaType = file.mimetype.startsWith('video/') ? 'video' : 'image';
+  const folder = `projects/${projectId}/${mediaType === 'video' ? 'videos' : 'images'}`;
+  const objectPath = await uploadBuffer(file.buffer, folder, file.originalname, file.mimetype);
+
+  const result = await pool.query(
+    `INSERT INTO project_media (project_id, media_type, url, display_order, is_primary)
+     VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+    [projectId, mediaType, objectPath, options.displayOrder || 0, options.isPrimary || false]
+  );
+  return signUrls(result.rows[0], 'url');
+}
+
+async function deleteMedia(projectId, mediaId) {
+  const result = await pool.query(
+    'DELETE FROM project_media WHERE id = $1 AND project_id = $2 RETURNING id, url',
+    [mediaId, projectId]
+  );
+  if (result.rows.length === 0) throw notFound('Media not found for this project');
+  await deleteObject(result.rows[0].url);
+}
+
+// Cover photo is mutually exclusive - see property.service.js's
+// setPrimaryMedia for why this runs inside a transaction.
+async function setPrimaryMedia(projectId, mediaId) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const target = await client.query(
+      'SELECT id FROM project_media WHERE id = $1 AND project_id = $2 FOR UPDATE',
+      [mediaId, projectId]
+    );
+    if (target.rows.length === 0) throw notFound('Media not found for this project');
+
+    await client.query('UPDATE project_media SET is_primary = false WHERE project_id = $1', [projectId]);
+    const result = await client.query(
+      'UPDATE project_media SET is_primary = true WHERE id = $1 RETURNING *',
+      [mediaId]
+    );
+
+    await client.query('COMMIT');
+    return signUrls(result.rows[0], 'url');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 async function listUnits(projectId, filters) {
@@ -242,6 +332,10 @@ module.exports = {
   createProject,
   updateProject,
   deleteProject,
+  addMedia,
+  uploadMedia,
+  deleteMedia,
+  setPrimaryMedia,
   listUnits,
   createUnit,
   getUnitWithProject,

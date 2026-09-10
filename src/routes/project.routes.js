@@ -4,6 +4,7 @@ const { body, param, query } = require('express-validator');
 const projectController = require('../controllers/project.controller');
 const validate = require('../middlewares/validate');
 const { authenticate, authorize } = require('../middlewares/auth');
+const { uploadProjectMedia } = require('../middlewares/upload');
 
 const PROJECT_STATUSES = ['draft', 'upcoming', 'ongoing', 'completed', 'on_hold'];
 const UNIT_STATUSES = ['available', 'held', 'sold'];
@@ -118,6 +119,8 @@ projectRouter.post(
     body('name').notEmpty().withMessage('Name is required'),
     body('city').notEmpty().withMessage('City is required'),
     body('builderId').optional().isUUID(),
+    body('amenities').optional().isArray(),
+    body('configurations').optional().isArray(),
   ],
   validate,
   projectController.createProject
@@ -157,6 +160,8 @@ projectRouter.put(
   [
     param('id').isUUID().withMessage('Invalid project id'),
     body('status').optional().isIn(PROJECT_STATUSES),
+    body('amenities').optional().isArray(),
+    body('configurations').optional().isArray(),
   ],
   validate,
   projectController.updateProject
@@ -225,6 +230,182 @@ projectRouter.post(
   ],
   validate,
   projectController.bulkDeleteProjects
+);
+
+/**
+ * @swagger
+ * /projects/{id}/media:
+ *   post:
+ *     summary: Attach media (images/videos) to a project via pre-hosted URLs
+ *     description: >
+ *       Accepts media URLs directly in the body, for media already hosted
+ *       elsewhere. To upload a file directly (stored in GCS), use
+ *       `POST /projects/{id}/media/upload`.
+ *     tags: [Projects]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [media]
+ *             properties:
+ *               media:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   required: [url]
+ *                   properties:
+ *                     url: { type: string }
+ *                     mediaType: { type: string, enum: [image, video], example: image }
+ *     responses:
+ *       201:
+ *         description: Media attached successfully
+ *       403:
+ *         description: Not the project's builder/admin
+ *       404:
+ *         description: Project not found
+ */
+projectRouter.post(
+  '/:id/media',
+  authenticate,
+  [
+    param('id').isUUID().withMessage('Invalid project id'),
+    body('media').isArray({ min: 1 }).withMessage('media must be a non-empty array'),
+    body('media.*.url').notEmpty().withMessage('Each media item requires a url'),
+    body('media.*.mediaType').optional().isIn(['image', 'video']),
+  ],
+  validate,
+  projectController.addMedia
+);
+
+/**
+ * @swagger
+ * /projects/{id}/media/upload:
+ *   post:
+ *     summary: Upload a project photo/video directly
+ *     description: >
+ *       Stores the file in GCS under `projects/{id}/images/...` or
+ *       `projects/{id}/videos/...` (media type inferred from mimetype) and
+ *       records the resulting object path in project_media. Postgres stores
+ *       only the path, never a public URL - reads are served via short-lived
+ *       signed URLs.
+ *     tags: [Projects]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [file]
+ *             properties:
+ *               file: { type: string, format: binary }
+ *               displayOrder: { type: integer, example: 0 }
+ *               isPrimary: { type: boolean, example: true }
+ *     responses:
+ *       201:
+ *         description: Media uploaded successfully
+ *       400:
+ *         description: Missing/oversized/unsupported file
+ *       403:
+ *         description: Not the project's builder/admin
+ *       404:
+ *         description: Project not found
+ */
+projectRouter.post(
+  '/:id/media/upload',
+  authenticate,
+  [param('id').isUUID().withMessage('Invalid project id')],
+  validate,
+  uploadProjectMedia.single('file'),
+  projectController.uploadMedia
+);
+
+/**
+ * @swagger
+ * /projects/{id}/media/{mediaId}:
+ *   delete:
+ *     summary: Remove a media item from a project
+ *     tags: [Projects]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: path
+ *         name: mediaId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Media removed successfully
+ *       403:
+ *         description: Not the project's builder/admin
+ *       404:
+ *         description: Project or media not found
+ */
+projectRouter.delete(
+  '/:id/media/:mediaId',
+  authenticate,
+  [
+    param('id').isUUID().withMessage('Invalid project id'),
+    param('mediaId').isUUID().withMessage('Invalid media id'),
+  ],
+  validate,
+  projectController.deleteMedia
+);
+
+/**
+ * @swagger
+ * /projects/{id}/media/{mediaId}/primary:
+ *   put:
+ *     summary: Set a media item as the project's cover photo
+ *     description: Mutually exclusive - clears is_primary on every other media item for this project.
+ *     tags: [Projects]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: path
+ *         name: mediaId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Cover photo updated successfully
+ *       403:
+ *         description: Not the project's builder/admin
+ *       404:
+ *         description: Project or media not found
+ */
+projectRouter.put(
+  '/:id/media/:mediaId/primary',
+  authenticate,
+  [
+    param('id').isUUID().withMessage('Invalid project id'),
+    param('mediaId').isUUID().withMessage('Invalid media id'),
+  ],
+  validate,
+  projectController.setPrimaryMedia
 );
 
 /**
