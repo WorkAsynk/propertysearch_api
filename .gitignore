@@ -6,6 +6,11 @@ node_modules/
 .env.*
 !.env.example
 
+# GCP service account keys - never commit these
+gcs-key.json
+*-key.json
+*.serviceaccount.json
+
 # Logs
 logs/
 *.log
