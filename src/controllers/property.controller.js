@@ -14,8 +14,8 @@ async function listProperties(req, res, next) {
       propertyType: req.query.propertyType,
       transactionType: req.query.transactionType,
       status: req.query.status,
-      minPrice: req.query.minPrice,
-      maxPrice: req.query.maxPrice,
+      minRate: req.query.minRate,
+      maxRate: req.query.maxRate,
     };
 
     const { items, pagination } = await propertyService.listProperties(
@@ -209,6 +209,38 @@ async function getPropertyInquiries(req, res, next) {
   }
 }
 
+// POST /api/properties/:id/favorite
+async function addFavorite(req, res, next) {
+  try {
+    await propertyService.addFavorite(req.params.id, req.user);
+    return success(res, 200, 'Property added to favorites');
+  } catch (err) {
+    next(err);
+  }
+}
+
+// DELETE /api/properties/:id/favorite
+async function removeFavorite(req, res, next) {
+  try {
+    await propertyService.removeFavorite(req.params.id, req.user);
+    return success(res, 200, 'Property removed from favorites');
+  } catch (err) {
+    next(err);
+  }
+}
+
+// GET /api/properties/favorites
+async function listFavorites(req, res, next) {
+  try {
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
+    const { items, pagination } = await propertyService.listFavorites(req.user, page, limit);
+    return success(res, 200, 'Favorites fetched successfully', { items, pagination });
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   listProperties,
   getProperty,
@@ -225,4 +257,7 @@ module.exports = {
   approveProperty,
   rejectProperty,
   getPropertyInquiries,
+  addFavorite,
+  removeFavorite,
+  listFavorites,
 };

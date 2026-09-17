@@ -1,6 +1,7 @@
 const pool = require('../config/db');
 const { isAdmin } = require('../utils/ownership');
 const { uploadBuffer, deleteObject, signUrls } = require('../utils/storage');
+const customerService = require('./customer.service');
 
 function notFound(message = 'Property not found') {
   const err = new Error(message);
@@ -11,6 +12,12 @@ function notFound(message = 'Property not found') {
 function badRequest(message) {
   const err = new Error(message);
   err.statusCode = 400;
+  return err;
+}
+
+function forbidden(message) {
+  const err = new Error(message);
+  err.statusCode = 403;
   return err;
 }
 
@@ -59,13 +66,13 @@ async function listProperties(user, filters, page, limit) {
     params.push(filters.status);
     where.push(`p.status = $${params.length}`);
   }
-  if (filters.minPrice) {
-    params.push(filters.minPrice);
-    where.push(`p.price >= $${params.length}`);
+  if (filters.minRate) {
+    params.push(filters.minRate);
+    where.push(`p.rate >= $${params.length}`);
   }
-  if (filters.maxPrice) {
-    params.push(filters.maxPrice);
-    where.push(`p.price <= $${params.length}`);
+  if (filters.maxRate) {
+    params.push(filters.maxRate);
+    where.push(`p.rate <= $${params.length}`);
   }
   // Used by the Broker CRM dashboard (GET /api/broker/inventory) to scope
   // to "properties created by or assigned (as broker) to this user" - kept
@@ -135,15 +142,28 @@ async function createProperty(data, user) {
     amenities,
     brokerId,
     builderId,
+    rate,
+    listingCategory,
+    annualAppreciationPercent,
+    estimatedRentMonthly,
+    localityRating,
+    auctionDate,
+    sourceBank,
+    occupancyPercent,
+    yieldPercent,
+    yieldQualifier,
   } = data;
 
   const result = await pool.query(
     `INSERT INTO properties (
        tenant_id, created_by, broker_id, builder_id, title, description,
        property_type, transaction_type, price, city, locality, address,
-       latitude, longitude, area_sqft, bedrooms, bathrooms, amenities, status
+       latitude, longitude, area_sqft, bedrooms, bathrooms, amenities, status,
+       rate, listing_category, annual_appreciation_percent, estimated_rent_monthly,
+       locality_rating, auction_date, source_bank, occupancy_percent, yield_percent, yield_qualifier
      ) VALUES (
-       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, 'pending_approval'
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, 'pending_approval',
+       $19, $20, $21, $22, $23, $24, $25, $26, $27, $28
      ) RETURNING *`,
     [
       user.tenant_id || null,
@@ -164,6 +184,16 @@ async function createProperty(data, user) {
       bedrooms || null,
       bathrooms || null,
       JSON.stringify(amenities || []),
+      rate ?? null,
+      listingCategory || 'residential',
+      annualAppreciationPercent ?? null,
+      estimatedRentMonthly ?? null,
+      localityRating ?? null,
+      auctionDate || null,
+      sourceBank || null,
+      occupancyPercent ?? null,
+      yieldPercent ?? null,
+      yieldQualifier || null,
     ]
   );
 
@@ -183,6 +213,16 @@ const UPDATABLE_FIELDS = {
   areaSqft: 'area_sqft',
   bedrooms: 'bedrooms',
   bathrooms: 'bathrooms',
+  rate: 'rate',
+  listingCategory: 'listing_category',
+  annualAppreciationPercent: 'annual_appreciation_percent',
+  estimatedRentMonthly: 'estimated_rent_monthly',
+  localityRating: 'locality_rating',
+  auctionDate: 'auction_date',
+  sourceBank: 'source_bank',
+  occupancyPercent: 'occupancy_percent',
+  yieldPercent: 'yield_percent',
+  yieldQualifier: 'yield_qualifier',
 };
 
 async function updateProperty(id, data) {
@@ -328,6 +368,66 @@ async function rejectProperty(id, reason, adminUser) {
   return getPropertyById(id);
 }
 
+// Resolves req.user.id -> the linked customers.id. A `customer`-role
+// account always has one (registerUser/findOrCreateCustomerByContact
+// links it at signup); staff roles (broker/admin/etc.) generally don't,
+// and get a 403 rather than a confusing empty favorites list.
+async function resolveCustomerId(user) {
+  const customer = await customerService.getCustomerByUserId(user.id);
+  if (!customer) throw forbidden('Only customer accounts can save favorites');
+  return customer.id;
+}
+
+async function addFavorite(propertyId, user) {
+  const customerId = await resolveCustomerId(user);
+  const property = await getPropertyById(propertyId);
+  if (property.status !== 'approved') {
+    throw badRequest('Only approved listings can be favorited');
+  }
+  await pool.query(
+    `INSERT INTO property_favorites (customer_id, property_id)
+     VALUES ($1, $2) ON CONFLICT (customer_id, property_id) DO NOTHING`,
+    [customerId, propertyId]
+  );
+}
+
+async function removeFavorite(propertyId, user) {
+  const customerId = await resolveCustomerId(user);
+  await pool.query(
+    'DELETE FROM property_favorites WHERE customer_id = $1 AND property_id = $2',
+    [customerId, propertyId]
+  );
+}
+
+async function listFavorites(user, page, limit) {
+  const customerId = await resolveCustomerId(user);
+  const offset = (page - 1) * limit;
+
+  const countResult = await pool.query(
+    'SELECT COUNT(*) FROM property_favorites WHERE customer_id = $1',
+    [customerId]
+  );
+
+  const result = await pool.query(
+    `${PROPERTY_SELECT}
+     JOIN property_favorites f ON f.property_id = p.id
+     WHERE f.customer_id = $1
+     ORDER BY f.created_at DESC
+     LIMIT $2 OFFSET $3`,
+    [customerId, limit, offset]
+  );
+
+  return {
+    items: result.rows,
+    pagination: {
+      page,
+      limit,
+      total: Number(countResult.rows[0].count),
+      totalPages: Math.ceil(Number(countResult.rows[0].count) / limit),
+    },
+  };
+}
+
 module.exports = {
   listProperties,
   getPropertyById,
@@ -342,4 +442,7 @@ module.exports = {
   updatePricing,
   approveProperty,
   rejectProperty,
+  addFavorite,
+  removeFavorite,
+  listFavorites,
 };

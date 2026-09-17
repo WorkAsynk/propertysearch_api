@@ -12,8 +12,8 @@ async function searchProperties(req, res, next) {
       locality: req.query.locality,
       propertyType: req.query.propertyType,
       transactionType: req.query.transactionType,
-      minPrice: req.query.minPrice,
-      maxPrice: req.query.maxPrice,
+      minRate: req.query.minRate,
+      maxRate: req.query.maxRate,
       amenities: req.query.amenities
         ? String(req.query.amenities).split(',').map((a) => a.trim())
         : undefined,

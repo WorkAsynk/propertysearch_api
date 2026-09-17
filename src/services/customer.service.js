@@ -72,6 +72,16 @@ async function getCustomerById(id) {
   return customer;
 }
 
+// Looks up a customer record by the login account (users.id) it's linked
+// to, rather than by customers.id - used to resolve "the customer record
+// for the currently authenticated user" (e.g. for favorites). Returns
+// null (not a 404) since a login account without a linked customer
+// record is an expected, non-error case for staff roles.
+async function getCustomerByUserId(userId) {
+  const result = await pool.query('SELECT * FROM customers WHERE user_id = $1 LIMIT 1', [userId]);
+  return result.rows[0] || null;
+}
+
 async function createCustomer(data, user) {
   const { fullName, email, mobile, userId } = data;
 
@@ -256,6 +266,7 @@ async function deleteCustomer(id) {
 module.exports = {
   listCustomers,
   getCustomerById,
+  getCustomerByUserId,
   createCustomer,
   findOrCreateCustomerByContact,
   updateCustomer,

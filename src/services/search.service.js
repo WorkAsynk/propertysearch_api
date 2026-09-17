@@ -1,8 +1,8 @@
 const pool = require('../config/db');
 
 const SORT_OPTIONS = {
-  price_asc: 'price ASC',
-  price_desc: 'price DESC',
+  rate_asc: 'rate ASC NULLS LAST',
+  rate_desc: 'rate DESC NULLS LAST',
   newest: 'created_at DESC',
 };
 
@@ -26,13 +26,13 @@ async function searchProperties(filters, page, limit, sort) {
     params.push(filters.transactionType);
     where.push(`transaction_type = $${params.length}`);
   }
-  if (filters.minPrice) {
-    params.push(filters.minPrice);
-    where.push(`price >= $${params.length}`);
+  if (filters.minRate) {
+    params.push(filters.minRate);
+    where.push(`rate >= $${params.length}`);
   }
-  if (filters.maxPrice) {
-    params.push(filters.maxPrice);
-    where.push(`price <= $${params.length}`);
+  if (filters.maxRate) {
+    params.push(filters.maxRate);
+    where.push(`rate <= $${params.length}`);
   }
   if (filters.amenities && filters.amenities.length > 0) {
     params.push(JSON.stringify(filters.amenities));
@@ -47,8 +47,8 @@ async function searchProperties(filters, page, limit, sort) {
 
   params.push(limit, offset);
   const result = await pool.query(
-    `SELECT id, title, description, property_type, transaction_type, price,
-            city, locality, address, latitude, longitude, area_sqft,
+    `SELECT id, title, description, property_type, transaction_type, price, rate,
+            listing_category, city, locality, address, latitude, longitude, area_sqft,
             bedrooms, bathrooms, amenities, created_at
      FROM properties
      ${whereClause}
@@ -69,14 +69,14 @@ async function searchProperties(filters, page, limit, sort) {
 }
 
 async function getFilterOptions() {
-  const [cities, propertyTypes, transactionTypes, priceRange] = await Promise.all([
+  const [cities, propertyTypes, transactionTypes, rateRange] = await Promise.all([
     pool.query(
       `SELECT DISTINCT city FROM properties WHERE status = 'approved' ORDER BY city ASC`
     ),
     pool.query(`SELECT unnest(enum_range(NULL::property_type)) AS value`),
     pool.query(`SELECT unnest(enum_range(NULL::transaction_type)) AS value`),
     pool.query(
-      `SELECT MIN(price) AS min_price, MAX(price) AS max_price FROM properties WHERE status = 'approved'`
+      `SELECT MIN(rate) AS min_rate, MAX(rate) AS max_rate FROM properties WHERE status = 'approved'`
     ),
   ]);
 
@@ -84,9 +84,9 @@ async function getFilterOptions() {
     cities: cities.rows.map((r) => r.city),
     propertyTypes: propertyTypes.rows.map((r) => r.value),
     transactionTypes: transactionTypes.rows.map((r) => r.value),
-    priceRange: {
-      min: priceRange.rows[0].min_price !== null ? Number(priceRange.rows[0].min_price) : null,
-      max: priceRange.rows[0].max_price !== null ? Number(priceRange.rows[0].max_price) : null,
+    rateRange: {
+      min: rateRange.rows[0].min_rate !== null ? Number(rateRange.rows[0].min_rate) : null,
+      max: rateRange.rows[0].max_rate !== null ? Number(rateRange.rows[0].max_rate) : null,
     },
   };
 }

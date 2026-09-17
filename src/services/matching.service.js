@@ -23,11 +23,15 @@ function scoreProperty(property, preferences) {
   if (locationMatch) score += 40;
   reasons.locationMatch = locationMatch;
 
+  // `property.price` is free text (e.g. "2.1 Cr", "Price on Request"), not
+  // guaranteed to parse as a number - skip budget scoring rather than
+  // silently comparing against NaN (which would always fail every check
+  // below and wrongly report every such listing as 'out_of_range').
   const price = Number(property.price);
   const budgetMin = preferences.budget_min != null ? Number(preferences.budget_min) : null;
   const budgetMax = preferences.budget_max != null ? Number(preferences.budget_max) : null;
   let budgetFit = 'unknown';
-  if (budgetMin != null || budgetMax != null) {
+  if (Number.isFinite(price) && (budgetMin != null || budgetMax != null)) {
     const withinRange = (budgetMin == null || price >= budgetMin) && (budgetMax == null || price <= budgetMax);
     if (withinRange) {
       budgetFit = 'within_range';

@@ -37,18 +37,20 @@ const TRANSACTION_TYPES = ['buy', 'sell', 'rent'];
  *         name: transactionType
  *         schema: { type: string, enum: [buy, sell, rent] }
  *       - in: query
- *         name: minPrice
+ *         name: minRate
  *         schema: { type: number }
+ *         description: Minimum price per sq.ft.
  *       - in: query
- *         name: maxPrice
+ *         name: maxRate
  *         schema: { type: number }
+ *         description: Maximum price per sq.ft.
  *       - in: query
  *         name: amenities
  *         schema: { type: string }
  *         description: Comma-separated list of required amenities, e.g. "parking,gym"
  *       - in: query
  *         name: sort
- *         schema: { type: string, enum: [price_asc, price_desc, newest], default: newest }
+ *         schema: { type: string, enum: [rate_asc, rate_desc, newest], default: newest }
  *       - in: query
  *         name: page
  *         schema: { type: integer, default: 1 }
@@ -64,9 +66,9 @@ router.get(
   [
     query('propertyType').optional().isIn(PROPERTY_TYPES),
     query('transactionType').optional().isIn(TRANSACTION_TYPES),
-    query('minPrice').optional().isFloat({ min: 0 }),
-    query('maxPrice').optional().isFloat({ min: 0 }),
-    query('sort').optional().isIn(['price_asc', 'price_desc', 'newest']),
+    query('minRate').optional().isFloat({ min: 0 }),
+    query('maxRate').optional().isFloat({ min: 0 }),
+    query('sort').optional().isIn(['rate_asc', 'rate_desc', 'newest']),
     query('page').optional().isInt({ min: 1 }),
     query('limit').optional().isInt({ min: 1, max: 100 }),
   ],

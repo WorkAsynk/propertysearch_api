@@ -10,7 +10,24 @@ const { uploadPropertyMedia } = require('../middlewares/upload');
 const PROPERTY_TYPES = ['apartment', 'villa', 'independent_house', 'plot', 'commercial', 'farmhouse', 'other'];
 const TRANSACTION_TYPES = ['buy', 'sell', 'rent'];
 const PROPERTY_STATUSES = ['draft', 'pending_approval', 'approved', 'rejected', 'inactive'];
+const LISTING_CATEGORIES = ['residential', 'institutional', 'special_situation', 'auction'];
 const CREATE_ROLES = ['broker', 'agency_admin', 'builder', 'admin', 'super_admin'];
+
+// Shared across POST /properties and PUT /properties/:id - the fields
+// added alongside the price/rate/favorites change (rate, listing
+// category, market-trend and per-category variant fields).
+const EXTENDED_FIELD_VALIDATORS = [
+  body('rate').optional().isFloat({ min: 0 }).withMessage('Rate must be a positive number'),
+  body('listingCategory').optional().isIn(LISTING_CATEGORIES).withMessage('Invalid listing category'),
+  body('annualAppreciationPercent').optional().isFloat().withMessage('annualAppreciationPercent must be a number'),
+  body('estimatedRentMonthly').optional().isFloat({ min: 0 }),
+  body('localityRating').optional().isFloat({ min: 0, max: 5 }),
+  body('auctionDate').optional().isISO8601().withMessage('auctionDate must be a valid date/time'),
+  body('sourceBank').optional().isString().isLength({ max: 150 }),
+  body('occupancyPercent').optional().isFloat({ min: 0, max: 100 }),
+  body('yieldPercent').optional().isFloat({ min: 0 }),
+  body('yieldQualifier').optional().isString().isLength({ max: 100 }),
+];
 
 /**
  * @swagger
@@ -51,11 +68,13 @@ const CREATE_ROLES = ['broker', 'agency_admin', 'builder', 'admin', 'super_admin
  *         name: status
  *         schema: { type: string, enum: [draft, pending_approval, approved, rejected, inactive] }
  *       - in: query
- *         name: minPrice
+ *         name: minRate
  *         schema: { type: number }
+ *         description: Minimum price per sq.ft.
  *       - in: query
- *         name: maxPrice
+ *         name: maxRate
  *         schema: { type: number }
+ *         description: Maximum price per sq.ft.
  *     responses:
  *       200:
  *         description: Paginated list of properties
@@ -71,11 +90,44 @@ router.get(
     query('propertyType').optional().isIn(PROPERTY_TYPES),
     query('transactionType').optional().isIn(TRANSACTION_TYPES),
     query('status').optional().isIn(PROPERTY_STATUSES),
-    query('minPrice').optional().isFloat({ min: 0 }),
-    query('maxPrice').optional().isFloat({ min: 0 }),
+    query('minRate').optional().isFloat({ min: 0 }),
+    query('maxRate').optional().isFloat({ min: 0 }),
   ],
   validate,
   propertyController.listProperties
+);
+
+/**
+ * @swagger
+ * /properties/favorites:
+ *   get:
+ *     summary: List the authenticated customer's favorited properties
+ *     description: Requires the authenticated account to have a linked customer record (every `customer`-role account has one; staff roles typically do not, and get a 403).
+ *     tags: [Properties]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 20 }
+ *     responses:
+ *       200:
+ *         description: Paginated list of favorited properties
+ *       403:
+ *         description: Authenticated account has no linked customer record
+ */
+router.get(
+  '/favorites',
+  authenticate,
+  [
+    query('page').optional().isInt({ min: 1 }),
+    query('limit').optional().isInt({ min: 1, max: 100 }),
+  ],
+  validate,
+  propertyController.listFavorites
 );
 
 /**
@@ -136,7 +188,7 @@ router.post(
     body('title').notEmpty().withMessage('Title is required'),
     body('propertyType').isIn(PROPERTY_TYPES).withMessage('Invalid property type'),
     body('transactionType').isIn(TRANSACTION_TYPES).withMessage('Invalid transaction type'),
-    body('price').isFloat({ min: 0 }).withMessage('Price must be a positive number'),
+    body('price').notEmpty().withMessage('Price is required').isString().isLength({ max: 100 }),
     body('city').notEmpty().withMessage('City is required'),
     body('locality').optional().isString(),
     body('address').optional().isString(),
@@ -146,6 +198,7 @@ router.post(
     body('bedrooms').optional().isInt({ min: 0 }),
     body('bathrooms').optional().isInt({ min: 0 }),
     body('amenities').optional().isArray(),
+    ...EXTENDED_FIELD_VALIDATORS,
   ],
   validate,
   propertyController.createProperty
@@ -190,6 +243,7 @@ router.put(
     body('bedrooms').optional().isInt({ min: 0 }),
     body('bathrooms').optional().isInt({ min: 0 }),
     body('amenities').optional().isArray(),
+    ...EXTENDED_FIELD_VALIDATORS,
   ],
   validate,
   propertyController.updateProperty
@@ -503,7 +557,7 @@ router.put(
  *             type: object
  *             required: [price]
  *             properties:
- *               price: { type: number, example: 8500000 }
+ *               price: { type: string, example: "2.1 Cr" }
  *     responses:
  *       200:
  *         description: Pricing updated
@@ -517,10 +571,73 @@ router.put(
   authenticate,
   [
     param('id').isUUID().withMessage('Invalid property id'),
-    body('price').isFloat({ min: 0 }).withMessage('Price must be a positive number'),
+    body('price').notEmpty().withMessage('Price is required').isString().isLength({ max: 100 }),
   ],
   validate,
   propertyController.updatePricing
+);
+
+/**
+ * @swagger
+ * /properties/{id}/favorite:
+ *   post:
+ *     summary: Save a property to the authenticated customer's favorites
+ *     description: >
+ *       Requires the authenticated account to have a linked customer record
+ *       (every `customer`-role account has one; staff roles typically do
+ *       not, and get a 403). Idempotent - favoriting an already-favorited
+ *       property is a no-op. Only `approved` listings can be favorited.
+ *     tags: [Properties]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Property added to favorites
+ *       400:
+ *         description: Property is not approved
+ *       403:
+ *         description: Authenticated account has no linked customer record
+ *       404:
+ *         description: Property not found
+ */
+router.post(
+  '/:id/favorite',
+  authenticate,
+  [param('id').isUUID().withMessage('Invalid property id')],
+  validate,
+  propertyController.addFavorite
+);
+
+/**
+ * @swagger
+ * /properties/{id}/favorite:
+ *   delete:
+ *     summary: Remove a property from the authenticated customer's favorites
+ *     tags: [Properties]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Property removed from favorites
+ *       403:
+ *         description: Authenticated account has no linked customer record
+ */
+router.delete(
+  '/:id/favorite',
+  authenticate,
+  [param('id').isUUID().withMessage('Invalid property id')],
+  validate,
+  propertyController.removeFavorite
 );
 
 /**
