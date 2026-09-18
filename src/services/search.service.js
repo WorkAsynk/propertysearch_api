@@ -10,11 +10,15 @@ function notFound(message = 'Property not found') {
 const SORT_OPTIONS = {
   rate_asc: 'rate ASC NULLS LAST',
   rate_desc: 'rate DESC NULLS LAST',
-  newest: 'created_at DESC',
+  newest: 'properties.created_at DESC',
 };
 
 async function searchProperties(filters, page, limit, sort) {
-  const where = [`status = 'approved'`];
+  // Qualified with the table name (harmless when unjoined, e.g. in the
+  // COUNT query below) since the results SELECT joins `users` for
+  // builder_name, and `users` also has its own status/created_at columns -
+  // an unqualified reference would be ambiguous once that join is present.
+  const where = [`properties.status = 'approved'`];
   const params = [];
 
   if (filters.city) {
@@ -54,12 +58,14 @@ async function searchProperties(filters, page, limit, sort) {
 
   params.push(limit, offset);
   const result = await pool.query(
-    `SELECT id, title, description, property_type, transaction_type, price, rate,
+    `SELECT properties.id, title, description, property_type, transaction_type, price, rate,
             listing_category, city, locality, address, latitude, longitude, area_sqft,
-            bedrooms, bathrooms, amenities, created_at,
+            bedrooms, bathrooms, amenities, properties.created_at,
+            builder.full_name AS builder_name,
             (SELECT url FROM property_media pm WHERE pm.property_id = properties.id
              ORDER BY pm.is_primary DESC, pm.display_order ASC LIMIT 1) AS primary_image
      FROM properties
+     LEFT JOIN users builder ON builder.id = properties.builder_id
      ${whereClause}
      ORDER BY ${orderClause}
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
