@@ -1,5 +1,5 @@
 const express = require('express');
-const { query } = require('express-validator');
+const { query, param } = require('express-validator');
 const router = express.Router();
 
 const searchController = require('../controllers/search.controller');
@@ -74,6 +74,31 @@ router.get(
   ],
   validate,
   searchController.searchProperties
+);
+
+/**
+ * @swagger
+ * /search/properties/{id}:
+ *   get:
+ *     summary: Get a single approved property's full details (public, unauthenticated)
+ *     description: Only returns listings with status `approved` - a pending/draft/rejected id 404s the same as a missing one, so their existence isn't leaked publicly.
+ *     tags: [Search]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Property fetched successfully
+ *       404:
+ *         description: Property not found
+ */
+router.get(
+  '/properties/:id',
+  [param('id').isUUID().withMessage('Invalid property id')],
+  validate,
+  searchController.getProperty
 );
 
 /**

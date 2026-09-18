@@ -1,4 +1,11 @@
 const pool = require('../config/db');
+const { signUrls } = require('../utils/storage');
+
+function notFound(message = 'Property not found') {
+  const err = new Error(message);
+  err.statusCode = 404;
+  return err;
+}
 
 const SORT_OPTIONS = {
   rate_asc: 'rate ASC NULLS LAST',
@@ -49,7 +56,9 @@ async function searchProperties(filters, page, limit, sort) {
   const result = await pool.query(
     `SELECT id, title, description, property_type, transaction_type, price, rate,
             listing_category, city, locality, address, latitude, longitude, area_sqft,
-            bedrooms, bathrooms, amenities, created_at
+            bedrooms, bathrooms, amenities, created_at,
+            (SELECT url FROM property_media pm WHERE pm.property_id = properties.id
+             ORDER BY pm.is_primary DESC, pm.display_order ASC LIMIT 1) AS primary_image
      FROM properties
      ${whereClause}
      ORDER BY ${orderClause}
@@ -58,7 +67,7 @@ async function searchProperties(filters, page, limit, sort) {
   );
 
   return {
-    items: result.rows,
+    items: await signUrls(result.rows, 'primary_image'),
     pagination: {
       page,
       limit,
@@ -91,6 +100,36 @@ async function getFilterOptions() {
   };
 }
 
+// Public, unauthenticated single-property lookup for the customer-facing
+// website's detail page. Only ever returns `approved` listings, and never
+// exposes internal-only fields (tenant_id, created_by, approved_by,
+// rejection_reason) that the staff-facing PROPERTY_SELECT in
+// property.service.js includes.
+async function getPublicPropertyById(id) {
+  const result = await pool.query(
+    `SELECT p.id, p.title, p.description, p.property_type, p.transaction_type, p.price, p.rate,
+            p.listing_category, p.city, p.locality, p.address, p.latitude, p.longitude,
+            p.area_sqft, p.bedrooms, p.bathrooms, p.amenities,
+            p.annual_appreciation_percent, p.estimated_rent_monthly, p.locality_rating,
+            p.auction_date, p.source_bank, p.occupancy_percent, p.yield_percent, p.yield_qualifier,
+            p.created_at,
+            builder.full_name AS builder_name
+     FROM properties p
+     LEFT JOIN users builder ON builder.id = p.builder_id
+     WHERE p.id = $1 AND p.status = 'approved'`,
+    [id]
+  );
+  const property = result.rows[0];
+  if (!property) throw notFound();
+
+  const media = await pool.query(
+    'SELECT id, media_type, url, display_order, is_primary FROM property_media WHERE property_id = $1 ORDER BY display_order ASC, created_at ASC',
+    [id]
+  );
+
+  return { ...property, media: await signUrls(media.rows, 'url') };
+}
+
 async function getSuggestions(term) {
   const likeTerm = `${term}%`;
 
@@ -110,4 +149,4 @@ async function getSuggestions(term) {
   return [...cities.rows, ...localities.rows].slice(0, 10);
 }
 
-module.exports = { searchProperties, getFilterOptions, getSuggestions };
+module.exports = { searchProperties, getFilterOptions, getSuggestions, getPublicPropertyById };

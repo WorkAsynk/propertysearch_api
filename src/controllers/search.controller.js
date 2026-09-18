@@ -52,4 +52,14 @@ async function getSuggestions(req, res, next) {
   }
 }
 
-module.exports = { searchProperties, getFilters, getSuggestions };
+// GET /api/search/properties/:id
+async function getProperty(req, res, next) {
+  try {
+    const property = await searchService.getPublicPropertyById(req.params.id);
+    return success(res, 200, 'Property fetched successfully', property);
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { searchProperties, getFilters, getSuggestions, getProperty };
