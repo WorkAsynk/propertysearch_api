@@ -158,7 +158,12 @@ router.post(
   '/lead-capture',
   verifyWebhookSecret,
   [
-    body('phone').isString().notEmpty().isLength({ max: 20 }).withMessage('phone is required'),
+    body('phone').optional({ nullable: true }).isString().isLength({ max: 20 }),
+    body('waUserId').optional({ nullable: true }).isString().isLength({ max: 140 }),
+    body().custom((value) => {
+      if (!value.phone && !value.waUserId) throw new Error('phone or waUserId is required');
+      return true;
+    }),
     body('name').optional({ nullable: true }).isString().isLength({ max: 150 }),
     body('requirement').optional({ nullable: true }).isString().isLength({ max: 100 }),
     body('location').optional({ nullable: true }).isString().isLength({ max: 150 }),

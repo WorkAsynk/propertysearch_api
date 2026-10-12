@@ -873,9 +873,10 @@ const options = {
         },
         WhatsAppLeadCaptureRequest: {
           type: 'object',
-          required: ['phone'],
+          description: 'At least one of `phone` or `waUserId` is required.',
           properties: {
-            phone: { type: 'string', example: '919876543210', description: 'With or without country code' },
+            phone: { type: 'string', example: '919876543210', nullable: true, description: 'With or without country code. May be absent if the customer has hidden their number behind a WhatsApp username - use waUserId instead.' },
+            waUserId: { type: 'string', example: 'US.13491208655302741918', nullable: true, description: "Meta's Business-Scoped User ID (BSUID) - present on every WhatsApp contact, phone or not." },
             name: { type: 'string', example: 'Rahul Sharma' },
             requirement: { type: 'string', example: 'Buy Property', description: 'Buy / Rent / Investment' },
             location: { type: 'string', example: 'Mumbai' },

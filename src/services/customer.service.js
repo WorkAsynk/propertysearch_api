@@ -99,14 +99,15 @@ async function createCustomer(data, user) {
   return getCustomerById(result.rows[0].id);
 }
 
-// Used by the lead public-inquiry flow, and by a new self-registered
-// `customer` user account (registerUser/loginWithGoogle) - reuses an
-// existing customer record matched by email/mobile, or creates a new
-// (tenant-less, staff-less) one. `userId`, when given, links the customer
-// record to that login account - backfilled onto an existing match too, so
-// a customer record created earlier from a public inquiry (with no
-// account yet) gets linked the moment that same person signs up.
-async function findOrCreateCustomerByContact({ fullName, email, mobile, userId } = {}) {
+// Used by the lead public-inquiry flow, the WhatsApp bot, and a new
+// self-registered `customer` user account (registerUser/loginWithGoogle) -
+// reuses an existing customer record matched by email/mobile/WhatsApp
+// BSUID, or creates a new (tenant-less, staff-less) one. Any of
+// {userId, mobile, waUserId} missing on an existing match is backfilled
+// from this call - e.g. a WhatsApp user first captured via BSUID only
+// (number hidden) later messages with their number visible, or a customer
+// created from a public inquiry links to the account they sign up with.
+async function findOrCreateCustomerByContact({ fullName, email, mobile, waUserId, userId } = {}) {
   let existing = null;
   if (email) {
     const result = await pool.query('SELECT * FROM customers WHERE email = $1 LIMIT 1', [email]);
@@ -116,23 +117,33 @@ async function findOrCreateCustomerByContact({ fullName, email, mobile, userId }
     const result = await pool.query('SELECT * FROM customers WHERE mobile = $1 LIMIT 1', [mobile]);
     existing = result.rows[0];
   }
+  if (!existing && waUserId) {
+    const result = await pool.query('SELECT * FROM customers WHERE wa_user_id = $1 LIMIT 1', [waUserId]);
+    existing = result.rows[0];
+  }
 
   if (existing) {
-    if (userId && !existing.user_id) {
-      const updated = await pool.query(
-        'UPDATE customers SET user_id = $1 WHERE id = $2 RETURNING *',
-        [userId, existing.id]
-      );
-      return updated.rows[0];
-    }
-    return existing;
+    const set = [];
+    const params = [];
+    if (userId && !existing.user_id) { params.push(userId); set.push(`user_id = $${params.length}`); }
+    if (mobile && !existing.mobile) { params.push(mobile); set.push(`mobile = $${params.length}`); }
+    if (waUserId && !existing.wa_user_id) { params.push(waUserId); set.push(`wa_user_id = $${params.length}`); }
+
+    if (set.length === 0) return existing;
+
+    params.push(existing.id);
+    const updated = await pool.query(
+      `UPDATE customers SET ${set.join(', ')} WHERE id = $${params.length} RETURNING *`,
+      params
+    );
+    return updated.rows[0];
   }
 
   const result = await pool.query(
-    `INSERT INTO customers (user_id, full_name, email, mobile)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO customers (user_id, full_name, email, mobile, wa_user_id)
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING *`,
-    [userId || null, fullName, email || null, mobile || null]
+    [userId || null, fullName, email || null, mobile || null, waUserId || null]
   );
   return result.rows[0];
 }

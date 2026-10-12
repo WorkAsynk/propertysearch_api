@@ -12,6 +12,24 @@ function apiUrl() {
   return `https://graph.facebook.com/${GRAPH_VERSION}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
 }
 
+function badRequest(message) {
+  const err = new Error(message);
+  err.statusCode = 400;
+  return err;
+}
+
+// Every send accepts EITHER a phone number (`to`) OR a BSUID (`recipient`) -
+// Meta's Business-Scoped User ID, the identity it guarantees on every
+// contact even when the customer has hidden their number behind a WhatsApp
+// username. Phone wins when both are known (matches Meta's own documented
+// precedence); `recipient_type` is only needed on the BSUID path.
+// https://developers.facebook.com/documentation/business-messaging/whatsapp/business-scoped-user-ids
+function addRecipient(body, { to, recipient }) {
+  if (to) return { ...body, to };
+  if (recipient) return { ...body, recipient_type: 'individual', recipient };
+  throw badRequest('A phone number or BSUID recipient is required');
+}
+
 async function callGraphApi(body) {
   if (!process.env.WHATSAPP_ACCESS_TOKEN || !process.env.WHATSAPP_PHONE_NUMBER_ID) throw configError();
 
@@ -35,56 +53,68 @@ async function callGraphApi(body) {
   return { providerMessageId: data.messages?.[0]?.id || null, raw: data };
 }
 
-async function sendText({ to, body }) {
-  return callGraphApi({ to, type: 'text', text: { body } });
+async function sendText({ to, recipient, body }) {
+  return callGraphApi(addRecipient({ type: 'text', text: { body } }, { to, recipient }));
 }
 
 // `variables` (plain strings) map 1:1 to the template's {{1}}, {{2}}, ...
 // body placeholders. The template itself must already be approved in Meta
 // Business Manager under this exact name.
-async function sendTemplate({ to, templateName, languageCode, variables = [] }) {
+async function sendTemplate({ to, recipient, templateName, languageCode, variables = [] }) {
   const components = variables.length
     ? [{ type: 'body', parameters: variables.map((value) => ({ type: 'text', text: String(value) })) }]
     : undefined;
 
-  return callGraphApi({
-    to,
-    type: 'template',
-    template: {
-      name: templateName,
-      language: { code: languageCode || process.env.WHATSAPP_TEMPLATE_LANGUAGE || 'en_US' },
-      ...(components ? { components } : {}),
-    },
-  });
+  return callGraphApi(
+    addRecipient(
+      {
+        type: 'template',
+        template: {
+          name: templateName,
+          language: { code: languageCode || process.env.WHATSAPP_TEMPLATE_LANGUAGE || 'en_US' },
+          ...(components ? { components } : {}),
+        },
+      },
+      { to, recipient }
+    )
+  );
 }
 
 // Up to 3 quick-reply buttons. `buttons` is [{ id, title }].
-async function sendInteractiveButtons({ to, body, buttons }) {
-  return callGraphApi({
-    to,
-    type: 'interactive',
-    interactive: {
-      type: 'button',
-      body: { text: body },
-      action: { buttons: buttons.map((b) => ({ type: 'reply', reply: { id: b.id, title: b.title } })) },
-    },
-  });
+async function sendInteractiveButtons({ to, recipient, body, buttons }) {
+  return callGraphApi(
+    addRecipient(
+      {
+        type: 'interactive',
+        interactive: {
+          type: 'button',
+          body: { text: body },
+          action: { buttons: buttons.map((b) => ({ type: 'reply', reply: { id: b.id, title: b.title } })) },
+        },
+      },
+      { to, recipient }
+    )
+  );
 }
 
 // For more than 3 options. `options` is [{ id, title }].
-async function sendInteractiveList({ to, body, buttonText, options }) {
-  return callGraphApi({
-    to,
-    type: 'interactive',
-    interactive: {
-      type: 'list',
-      body: { text: body },
-      action: {
-        button: buttonText || 'Choose',
-        sections: [{ title: 'Options', rows: options.map((o) => ({ id: o.id, title: o.title })) }],
+async function sendInteractiveList({ to, recipient, body, buttonText, options }) {
+  return callGraphApi(
+    addRecipient(
+      {
+        type: 'interactive',
+        interactive: {
+          type: 'list',
+          body: { text: body },
+          action: {
+            button: buttonText || 'Choose',
+            sections: [{ title: 'Options', rows: options.map((o) => ({ id: o.id, title: o.title })) }],
+          },
+        },
       },
-    },
-  });
+      { to, recipient }
+    )
+  );
 }
 
 // Meta signs every webhook POST with the app secret - see

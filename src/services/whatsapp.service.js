@@ -69,7 +69,7 @@ function parseBudget(text) {
 
 async function getLeadWithCustomer(leadId) {
   const result = await pool.query(
-    `SELECT l.*, c.mobile AS customer_mobile, c.full_name AS customer_full_name
+    `SELECT l.*, c.mobile AS customer_mobile, c.wa_user_id AS customer_wa_user_id, c.full_name AS customer_full_name
      FROM leads l JOIN customers c ON c.id = l.customer_id
      WHERE l.id = $1`,
     [leadId]
@@ -78,17 +78,27 @@ async function getLeadWithCustomer(leadId) {
   return result.rows[0];
 }
 
+// Resolves which identity to send to: a phone number if known, else the
+// WhatsApp BSUID (Business-Scoped User ID) - the one identity Meta
+// guarantees even when the customer has hidden their number behind a
+// WhatsApp username. Throws only when genuinely neither is on file.
+function resolveContact({ phoneNumber, waUserId }) {
+  if (phoneNumber) return { to: toInternationalMobile(phoneNumber) };
+  if (waUserId) return { recipient: waUserId };
+  throw badRequest('No phone number or WhatsApp id available to send to');
+}
+
 // Sends an approved template via Meta's WhatsApp Cloud API and logs it in
 // whatsapp_conversations. A provider failure is logged as a 'failed' row
 // (so it shows in the lead's conversation history) and then re-thrown.
-async function sendTemplateMessage({ tenantId, leadId, customerId, phoneNumber, templateName, messageBody, variables }) {
-  if (!phoneNumber) throw badRequest('No phone number available to send to');
+async function sendTemplateMessage({ tenantId, leadId, customerId, phoneNumber, waUserId, templateName, messageBody, variables }) {
+  const contact = resolveContact({ phoneNumber, waUserId });
 
   let providerMessageId = null;
   let status = 'sent';
   let sendError = null;
   try {
-    const sent = await metaWhatsappService.sendTemplate({ to: toInternationalMobile(phoneNumber), templateName, variables });
+    const sent = await metaWhatsappService.sendTemplate({ ...contact, templateName, variables });
     providerMessageId = sent.providerMessageId;
   } catch (err) {
     status = 'failed';
@@ -97,11 +107,11 @@ async function sendTemplateMessage({ tenantId, leadId, customerId, phoneNumber, 
 
   const result = await pool.query(
     `INSERT INTO whatsapp_conversations (
-       tenant_id, lead_id, customer_id, phone_number, direction, message_type,
+       tenant_id, lead_id, customer_id, phone_number, wa_user_id, direction, message_type,
        template_name, message_body, provider_message_id, status
-     ) VALUES ($1, $2, $3, $4, 'outbound', 'template', $5, $6, $7, $8)
+     ) VALUES ($1, $2, $3, $4, $5, 'outbound', 'template', $6, $7, $8, $9)
      RETURNING *`,
-    [tenantId || null, leadId || null, customerId || null, phoneNumber, templateName, messageBody || null, providerMessageId, status]
+    [tenantId || null, leadId || null, customerId || null, phoneNumber || null, waUserId || null, templateName, messageBody || null, providerMessageId, status]
   );
 
   if (sendError) throw sendError;
@@ -123,6 +133,7 @@ async function sendTemplate(data, user) {
     leadId: lead.id,
     customerId: lead.customer_id,
     phoneNumber: toNumber,
+    waUserId: lead.customer_wa_user_id,
     templateName,
     variables: Array.isArray(variables) ? variables : [lead.customer_full_name],
   });
@@ -153,6 +164,7 @@ async function shareProperty(data, user) {
     leadId: lead.id,
     customerId: lead.customer_id,
     phoneNumber: toNumber,
+    waUserId: lead.customer_wa_user_id,
     templateName: PROPERTY_SHARE_TEMPLATE,
     messageBody: `Shared property: ${property.rows[0].title}`,
     variables: [lead.customer_full_name, property.rows[0].title],
@@ -168,8 +180,9 @@ async function shareProperty(data, user) {
 
 // Internal function - called both from POST /api/whatsapp/acknowledge-lead
 // and directly from lead.service.js right after a lead is created. Never
-// throws for a missing phone number; it just no-ops, since a lead with no
-// contact number on file simply can't be acknowledged over WhatsApp.
+// throws for a missing contact; it just no-ops when a lead has no phone
+// number AND no WhatsApp BSUID on file (can't be acknowledged over WhatsApp
+// at all, e.g. a lead created from a non-WhatsApp source).
 //
 // `actingUser` is optional - when called automatically from lead creation
 // there's no HTTP-request user to attribute the activity-log entry to.
@@ -177,13 +190,14 @@ async function acknowledgeLead(leadId, { phoneNumber, actingUser } = {}) {
   const lead = await getLeadWithCustomer(leadId);
 
   const toNumber = phoneNumber || lead.customer_mobile;
-  if (!toNumber) return null;
+  if (!toNumber && !lead.customer_wa_user_id) return null;
 
   const message = await sendTemplateMessage({
     tenantId: lead.tenant_id,
     leadId: lead.id,
     customerId: lead.customer_id,
     phoneNumber: toNumber,
+    waUserId: lead.customer_wa_user_id,
     templateName: ACK_TEMPLATE,
     messageBody: `Hi ${lead.customer_full_name}, thanks for reaching out to PropertySerch - our team will get in touch shortly.`,
     variables: [lead.customer_full_name],
@@ -207,7 +221,7 @@ async function acknowledgeLeadEndpoint(data, user) {
   }
 
   const message = await acknowledgeLead(leadId, { phoneNumber, actingUser: user });
-  if (!message) throw badRequest('Lead has no phone number on file and none was provided');
+  if (!message) throw badRequest('Lead has no phone number or WhatsApp id on file, and none was provided');
   return message;
 }
 
@@ -249,7 +263,13 @@ async function handleWebhook(payload) {
       }
 
       for (const message of value.messages || []) {
-        const phoneNumber = message.from;
+        // `from` (phone) is OMITTED when the customer has hidden their
+        // number behind a WhatsApp username; `from_user_id` (BSUID) is
+        // present on every message regardless. BSUID is therefore the only
+        // identity to rely on for matching/dedup - phone is enrichment only.
+        // https://developers.facebook.com/documentation/business-messaging/whatsapp/business-scoped-user-ids
+        const phoneNumber = message.from || null;
+        const waUserId = message.from_user_id || null;
         let text = null;
         let buttonReplyId = null;
         let buttonReplyTitle = null;
@@ -265,10 +285,17 @@ async function handleWebhook(payload) {
           buttonReplyTitle = message.button?.text || null;
         }
 
-        const customerResult = await pool.query('SELECT id, tenant_id FROM customers WHERE mobile = $1 LIMIT 1', [
-          toLocalMobile(phoneNumber),
-        ]);
-        const customer = customerResult.rows[0] || null;
+        let customer = null;
+        if (phoneNumber) {
+          const byPhone = await pool.query('SELECT id, tenant_id FROM customers WHERE mobile = $1 LIMIT 1', [
+            toLocalMobile(phoneNumber),
+          ]);
+          customer = byPhone.rows[0] || null;
+        }
+        if (!customer && waUserId) {
+          const byWaUserId = await pool.query('SELECT id, tenant_id FROM customers WHERE wa_user_id = $1 LIMIT 1', [waUserId]);
+          customer = byWaUserId.rows[0] || null;
+        }
 
         let lead = null;
         if (customer) {
@@ -281,20 +308,21 @@ async function handleWebhook(payload) {
 
         await pool.query(
           `INSERT INTO whatsapp_conversations (
-             tenant_id, lead_id, customer_id, phone_number, direction, message_type,
+             tenant_id, lead_id, customer_id, phone_number, wa_user_id, direction, message_type,
              message_body, provider_message_id, status
-           ) VALUES ($1, $2, $3, $4, 'inbound', 'text', $5, $6, 'delivered')`,
+           ) VALUES ($1, $2, $3, $4, $5, 'inbound', 'text', $6, $7, 'delivered')`,
           [
             lead?.tenant_id || customer?.tenant_id || null,
             lead?.id || null,
             customer?.id || null,
             phoneNumber,
+            waUserId,
             text || buttonReplyTitle || null,
             message.id || null,
           ]
         );
 
-        inboundMessages.push({ phoneNumber, text, buttonReplyId, buttonReplyTitle, messageId: message.id });
+        inboundMessages.push({ phoneNumber, waUserId, text, buttonReplyId, buttonReplyTitle, messageId: message.id });
       }
     }
   }
@@ -325,25 +353,29 @@ function parseBedrooms(text) {
   return match ? Number(match[1]) : null;
 }
 
-// POST /api/whatsapp/lead-capture (called by the MSG91 bot / WhatsApp Flow
-// once the customer has answered every question). Finds-or-creates the
-// customer by phone, stores their answers as preferences, and opens a
-// 'whatsapp' lead - or, if that customer already has an open lead, adds the
-// new answers to it instead of creating a duplicate.
+// POST /api/whatsapp/lead-capture, or straight from the bot once the
+// customer has answered every question. Finds-or-creates the customer by
+// phone (if known) or WhatsApp BSUID (always known), stores their answers
+// as preferences, and opens a 'whatsapp' lead - or, if that customer
+// already has an open lead, adds the new answers to it instead of
+// creating a duplicate. At least one of {phone, waUserId} is required.
 async function captureLead(data) {
-  const { phone, name, requirement, location, budget, propertyType, notes } = data;
+  const { phone, waUserId, name, requirement, location, budget, propertyType, notes } = data;
 
-  const mobile = toLocalMobile(phone);
-  if (mobile.length < 8) throw badRequest('A valid phone number is required');
+  const mobile = phone ? toLocalMobile(phone) : null;
+  if (!mobile && !waUserId) throw badRequest('A phone number or WhatsApp id is required');
+  if (mobile && mobile.length < 8) throw badRequest('A valid phone number is required');
 
   const defaultTenantId = process.env.WHATSAPP_DEFAULT_TENANT_ID || null;
   const cleanName = name && name.trim() ? name.trim() : null;
+  const placeholderName = `WhatsApp ${mobile || waUserId}`;
 
   let customer = await customerService.findOrCreateCustomerByContact({
-    fullName: cleanName || `WhatsApp ${mobile}`,
+    fullName: cleanName || placeholderName,
     mobile,
+    waUserId,
   });
-  if (cleanName && /^WhatsApp \d+$/.test(customer.full_name)) {
+  if (cleanName && customer.full_name.startsWith('WhatsApp ') && customer.full_name !== cleanName) {
     const updated = await pool.query('UPDATE customers SET full_name = $1 WHERE id = $2 RETURNING *', [cleanName, customer.id]);
     customer = updated.rows[0];
   }
@@ -419,14 +451,14 @@ async function captureLead(data) {
 
     await client.query(
       `INSERT INTO lead_activity_log (lead_id, user_id, action, details) VALUES ($1, NULL, 'whatsapp_lead_captured', $2)`,
-      [leadId, JSON.stringify({ requirement, location, budget, propertyType, notes, phone: mobile })]
+      [leadId, JSON.stringify({ requirement, location, budget, propertyType, notes, phone: mobile, waUserId })]
     );
 
     await client.query(
       `INSERT INTO whatsapp_conversations (
-         tenant_id, lead_id, customer_id, phone_number, direction, message_type, message_body, status
-       ) VALUES ($1, $2, $3, $4, 'inbound', 'text', $5, 'delivered')`,
-      [customer.tenant_id || defaultTenantId, leadId, customer.id, String(phone).replace(/\D/g, '').slice(0, 20), summary || 'WhatsApp bot lead capture']
+         tenant_id, lead_id, customer_id, phone_number, wa_user_id, direction, message_type, message_body, status
+       ) VALUES ($1, $2, $3, $4, $5, 'inbound', 'text', $6, 'delivered')`,
+      [customer.tenant_id || defaultTenantId, leadId, customer.id, phone ? String(phone).replace(/\D/g, '').slice(0, 20) : null, waUserId || null, summary || 'WhatsApp bot lead capture']
     );
 
     await client.query('COMMIT');

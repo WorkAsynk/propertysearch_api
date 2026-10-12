@@ -54,39 +54,58 @@ const QUESTIONS = [
   },
 ];
 
-async function sendQuestion(phoneNumber, question) {
+// `contact` is { phoneNumber, waUserId } - phone wins when known, else the
+// BSUID (always present) is used as the Graph API `recipient`.
+function contactParams({ phoneNumber, waUserId }) {
+  return phoneNumber ? { to: phoneNumber } : { recipient: waUserId };
+}
+
+async function sendQuestion(contact, question) {
   if (question.type === 'buttons') {
-    return metaWhatsappService.sendInteractiveButtons({ to: phoneNumber, body: question.body, buttons: question.options });
+    return metaWhatsappService.sendInteractiveButtons({ ...contactParams(contact), body: question.body, buttons: question.options });
   }
   if (question.type === 'list') {
     return metaWhatsappService.sendInteractiveList({
-      to: phoneNumber,
+      ...contactParams(contact),
       body: question.body,
       buttonText: question.buttonText,
       options: question.options,
     });
   }
-  return metaWhatsappService.sendText({ to: phoneNumber, body: question.body });
+  return metaWhatsappService.sendText({ ...contactParams(contact), body: question.body });
 }
 
-async function getOrCreateSession(phoneNumber) {
+// Sessions are keyed on the WhatsApp BSUID, not phone - Meta guarantees the
+// BSUID on every message but omits the phone number whenever the customer
+// has hidden it behind a WhatsApp username. `phoneNumber` is carried as
+// optional enrichment and backfilled onto the session if it becomes known
+// mid-conversation (the customer can toggle number visibility).
+async function getOrCreateSession({ phoneNumber, waUserId }) {
   const inserted = await pool.query(
-    `INSERT INTO whatsapp_bot_sessions (phone_number, current_step, answers, status)
-     VALUES ($1, $2, '{}'::jsonb, 'in_progress')
-     ON CONFLICT (phone_number) DO NOTHING
+    `INSERT INTO whatsapp_bot_sessions (phone_number, wa_user_id, current_step, answers, status)
+     VALUES ($1, $2, $3, '{}'::jsonb, 'in_progress')
+     ON CONFLICT (wa_user_id) DO NOTHING
      RETURNING *`,
-    [phoneNumber, QUESTIONS[0].key]
+    [phoneNumber, waUserId, QUESTIONS[0].key]
   );
   if (inserted.rows.length > 0) return { session: inserted.rows[0], isFresh: true };
 
-  const existing = await pool.query('SELECT * FROM whatsapp_bot_sessions WHERE phone_number = $1', [phoneNumber]);
-  const session = existing.rows[0];
+  const existing = await pool.query('SELECT * FROM whatsapp_bot_sessions WHERE wa_user_id = $1', [waUserId]);
+  let session = existing.rows[0];
+
+  if (phoneNumber && !session.phone_number) {
+    const backfilled = await pool.query(
+      'UPDATE whatsapp_bot_sessions SET phone_number = $1 WHERE wa_user_id = $2 RETURNING *',
+      [phoneNumber, waUserId]
+    );
+    session = backfilled.rows[0];
+  }
 
   if (session.status === 'completed') {
     const reset = await pool.query(
       `UPDATE whatsapp_bot_sessions SET current_step = $1, answers = '{}'::jsonb, status = 'in_progress'
-       WHERE phone_number = $2 RETURNING *`,
-      [QUESTIONS[0].key, phoneNumber]
+       WHERE wa_user_id = $2 RETURNING *`,
+      [QUESTIONS[0].key, waUserId]
     );
     return { session: reset.rows[0], isFresh: true };
   }
@@ -95,18 +114,24 @@ async function getOrCreateSession(phoneNumber) {
 }
 
 // Called once per inbound WhatsApp message (from the webhook controller,
-// after whatsapp.service.js has logged/parsed it). Advances that phone
-// number's question flow by exactly one step, or - once every question is
-// answered - hands the collected answers to whatsapp.service.js's
-// captureLead() (same lead-creation logic the MSG91 build used) and sends a
-// closing message.
-async function handleInboundMessage({ phoneNumber, text, buttonReplyId, buttonReplyTitle }) {
-  const { session, isFresh } = await getOrCreateSession(phoneNumber);
+// after whatsapp.service.js has logged/parsed it). Advances that contact's
+// question flow by exactly one step, or - once every question is answered -
+// hands the collected answers to whatsapp.service.js's captureLead() and
+// sends a closing message. `waUserId` (the BSUID) is required - Meta always
+// provides it; `phoneNumber` may be null when the customer's number is hidden.
+async function handleInboundMessage({ phoneNumber, waUserId, text, buttonReplyId, buttonReplyTitle }) {
+  if (!waUserId) throw new Error('waUserId is required to run the WhatsApp bot flow');
+  const contact = { phoneNumber, waUserId };
+  const { session, isFresh } = await getOrCreateSession(contact);
 
   if (isFresh) {
-    await sendQuestion(phoneNumber, QUESTIONS[0]);
-    return { phoneNumber, step: QUESTIONS[0].key, completed: false };
+    await sendQuestion(contact, QUESTIONS[0]);
+    return { phoneNumber, waUserId, step: QUESTIONS[0].key, completed: false };
   }
+
+  // The session may have picked up a phone number since it started
+  // (backfilled in getOrCreateSession) - prefer it for sending from here on.
+  const liveContact = { phoneNumber: phoneNumber || session.phone_number, waUserId };
 
   const currentIndex = QUESTIONS.findIndex((q) => q.key === session.current_step);
   const current = QUESTIONS[currentIndex];
@@ -115,22 +140,23 @@ async function handleInboundMessage({ phoneNumber, text, buttonReplyId, buttonRe
 
   const next = QUESTIONS[currentIndex + 1];
   if (next) {
-    await pool.query('UPDATE whatsapp_bot_sessions SET current_step = $1, answers = $2::jsonb WHERE phone_number = $3', [
+    await pool.query('UPDATE whatsapp_bot_sessions SET current_step = $1, answers = $2::jsonb WHERE wa_user_id = $3', [
       next.key,
       JSON.stringify(answers),
-      phoneNumber,
+      waUserId,
     ]);
-    await sendQuestion(phoneNumber, next);
-    return { phoneNumber, step: next.key, completed: false };
+    await sendQuestion(liveContact, next);
+    return { phoneNumber: liveContact.phoneNumber, waUserId, step: next.key, completed: false };
   }
 
-  await pool.query(`UPDATE whatsapp_bot_sessions SET answers = $1::jsonb, status = 'completed' WHERE phone_number = $2`, [
+  await pool.query(`UPDATE whatsapp_bot_sessions SET answers = $1::jsonb, status = 'completed' WHERE wa_user_id = $2`, [
     JSON.stringify(answers),
-    phoneNumber,
+    waUserId,
   ]);
 
   const result = await whatsappService.captureLead({
-    phone: phoneNumber,
+    phone: liveContact.phoneNumber,
+    waUserId,
     name: answers.name,
     requirement: answers.requirement,
     location: answers.location,
@@ -139,11 +165,11 @@ async function handleInboundMessage({ phoneNumber, text, buttonReplyId, buttonRe
   });
 
   await metaWhatsappService.sendText({
-    to: phoneNumber,
+    ...contactParams(liveContact),
     body: `Thanks${answers.name ? ` ${answers.name}` : ''}! We've got your requirement and our team will reach out to you shortly.`,
   });
 
-  return { phoneNumber, completed: true, ...result };
+  return { phoneNumber: liveContact.phoneNumber, waUserId, completed: true, ...result };
 }
 
 module.exports = { handleInboundMessage, QUESTIONS };
