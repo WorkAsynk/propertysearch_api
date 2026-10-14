@@ -1,6 +1,7 @@
 const express = require('express');
 const { body, param, query } = require('express-validator');
 const rateLimit = require('express-rate-limit');
+const fields = require('../services/dynamicFields.service');
 const router = express.Router();
 
 const leadController = require('../controllers/lead.controller');
@@ -160,6 +161,7 @@ router.get(
   authenticate,
   [param('id').isUUID().withMessage('Invalid lead id')],
   validate,
+  fields.expose('crm_lead', { mode: 'full' }),
   leadController.getLead
 );
 
@@ -197,6 +199,7 @@ router.post(
     body('assignedTo').optional().isUUID(),
   ],
   validate,
+  fields.capture('crm_lead', { create: true }),
   leadController.createLead
 );
 
@@ -237,6 +240,7 @@ router.put(
     body('propertyId').optional().isUUID(),
   ],
   validate,
+  fields.capture('crm_lead'),
   leadController.updateLead
 );
 

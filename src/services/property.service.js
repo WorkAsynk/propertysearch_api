@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const configService = require('./config.service');
 const { isAdmin } = require('../utils/ownership');
 const { uploadBuffer, deleteObject, signUrls, getReadUrl } = require('../utils/storage');
 const customerService = require('./customer.service');
@@ -171,6 +172,11 @@ async function listProperties(user, filters, page, limit) {
     where.push(`(p.created_by = $${params.length} OR p.broker_id = $${params.length})`);
   }
 
+  for (const probe of filters.customFieldProbes || []) {
+    params.push(probe);
+    where.push(require('./dynamicFields.service').searchSql('property', 'p', params.length));
+  }
+
   const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const offset = (page - 1) * limit;
 
@@ -325,6 +331,11 @@ async function createProperty(data, user, { autoVerify = true } = {}) {
     ]
   );
   const propertyId = result.rows[0].id;
+  // Territory is granted by pincode (sec. 14): keep the listing's own when given.
+  if (data.pincode && /^\d{6}$/.test(String(data.pincode).trim())) {
+    await pool.query('UPDATE properties SET pincode = $1 WHERE id = $2', [String(data.pincode).trim(), propertyId]);
+  }
+  require('./franchise.service').safeCheckListing(propertyId);
 
   const extra = { ...data, priceValue: data.priceValue ?? parsePriceToNumber(price) };
   const set = [];
@@ -358,6 +369,7 @@ const UPDATABLE_FIELDS = {
   transactionType: 'transaction_type',
   city: 'city',
   locality: 'locality',
+  pincode: 'pincode',
   address: 'address',
   latitude: 'latitude',
   longitude: 'longitude',
@@ -416,6 +428,8 @@ async function updateProperty(id, data) {
   }
   buildOpportunitySet(data, params, set);
 
+  // An edit that only changes admin-added fields (customFields) is saved by the route.
+  if (set.length === 0 && data.customFields !== undefined) return getPropertyById(id);
   if (set.length === 0) throw badRequest('No updatable fields provided');
 
   params.push(id);
@@ -546,6 +560,10 @@ async function updatePricing(id, price) {
 }
 
 async function approveProperty(id, adminUser) {
+  // Dynamic Field Manager: a listing that arrived without a form (WhatsApp,
+  // ingestion, import) may lack details the Super Admin made required.
+  const gaps = (await configService.getConfig('fields.block_approval_when_incomplete', true)) === false ? [] : await require('./dynamicFields.service').missing('property', id);
+  if (gaps.length) throw badRequest(`Complete these details before approving: ${gaps.map((g) => g.label).join(', ')}`);
   const result = await pool.query(
     `UPDATE properties
      SET status = 'approved', approved_by = $1, approved_at = now(), rejection_reason = NULL

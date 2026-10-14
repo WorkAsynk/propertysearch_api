@@ -91,6 +91,9 @@ async function getCrmTier(user, customer) {
   const investorTypes = investor ? [investor.is_hni && 'hni', investor.is_nri && 'nri'].filter(Boolean) : [];
   const exempt = investorTypes.some((t) => (exemptTypes || []).includes(t));
   const deals = closedDeals.rows[0].n + closedInvestments.rows[0].n;
+  // Engine 8: a coupon can switch the Full CRM workspace on for a number of days.
+  const until = (await pool.query('SELECT full_crm_until FROM customers WHERE id = $1', [customer.id])).rows[0]?.full_crm_until;
+  const couponUntil = until && new Date(until) > new Date() ? until : null;
   const earned = exempt || deals >= Number(dealThreshold) || referralCount >= Number(referralThreshold);
   let since = customer.full_crm_since || null;
   if (earned && !since) {
@@ -102,7 +105,8 @@ async function getCrmTier(user, customer) {
     investorTypes,
     referralCount,
     tier: {
-      current: earned || since ? 'full' : 'lite',
+      current: earned || since || couponUntil ? 'full' : 'lite',
+      couponUntil,
       exempt,
       fullSince: since,
       closedDeals: deals,
@@ -416,6 +420,7 @@ async function updateRequirement(user, id, data, meta = {}) {
     params.push(await temperatureFor(data.urgency));
     set.push(`temperature = $${params.length}::requirement_temperature`);
   }
+  if (!set.length && data.customFields !== undefined) return existing.rows[0];
   if (!set.length) throw badRequest('Nothing to update');
   params.push(id);
   const updated = await pool.query(`UPDATE requirements SET ${set.join(', ')} WHERE id = $${params.length} RETURNING *`, params);
@@ -787,6 +792,8 @@ async function updateListing(user, id, data, meta = {}) {
   await resolveCustomer(user);
   const listing = await getOwnListing(user, id);
   const input = Object.fromEntries(LISTING_INPUT_FIELDS.filter((k) => data[k] !== undefined).map((k) => [k, data[k]]));
+  // An edit that only changes admin-added fields (customFields) is saved by the route.
+  if (!Object.keys(input).length && data.customFields !== undefined) return listing;
   if (!Object.keys(input).length) throw badRequest('Nothing to update');
   const { price, ...rest } = input;
   if (Object.keys(rest).length) await propertyService.updateProperty(id, rest);

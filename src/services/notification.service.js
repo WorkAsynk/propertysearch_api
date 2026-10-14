@@ -7,12 +7,27 @@ function notFound(message = 'Notification not found') {
 }
 
 async function listNotifications(userId, filters, page, limit) {
+  const intel = require('./notificationIntel.service');
   const where = ['user_id = $1'];
   const params = [userId];
 
   if (filters.isRead !== undefined) {
     params.push(filters.isRead);
     where.push(`is_read = $${params.length}`);
+  }
+  // Notification Centre filters (Module 43): type group, priority and date range.
+  if (filters.category && intel.CATEGORIES[filters.category]) where.push(intel.categorySql(filters.category, params));
+  if (filters.priority && intel.PRIORITIES.includes(filters.priority)) {
+    params.push(filters.priority);
+    where.push(`priority = $${params.length}`);
+  }
+  if (filters.from) {
+    params.push(filters.from);
+    where.push(`created_at >= $${params.length}::date`);
+  }
+  if (filters.to) {
+    params.push(filters.to);
+    where.push(`created_at < $${params.length}::date + 1`);
   }
 
   const whereClause = `WHERE ${where.join(' AND ')}`;
@@ -30,7 +45,7 @@ async function listNotifications(userId, filters, page, limit) {
   );
 
   return {
-    items: result.rows,
+    items: result.rows.map((n) => ({ ...n, category: n.category || intel.categoryOf(n.type) })),
     pagination: {
       page,
       limit,
@@ -43,21 +58,25 @@ async function listNotifications(userId, filters, page, limit) {
 // Used internally by task.service.js (and available to any future module)
 // to raise a notification - kept centralized here since notification.service.js
 // owns the notifications table.
-async function createNotification({ userId, tenantId, type, title, message, relatedEntityType, relatedEntityId }, client = pool) {
+// `priority` overrides the priority worked out from the type; `alreadySent`
+// names channels the caller has delivered on itself (so they are not repeated).
+async function createNotification({ userId, tenantId, type, title, message, relatedEntityType, relatedEntityId, priority, alreadySent, scheduled }, client = pool) {
+  const intel = require('./notificationIntel.service');
+  const kind = intel.classify({ type, title, priority });
   const result = await client.query(
-    `INSERT INTO notifications (user_id, tenant_id, type, title, message, related_entity_type, related_entity_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO notifications (user_id, tenant_id, type, title, message, related_entity_type, related_entity_id, category, priority, persistent)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      RETURNING *`,
-    [userId, tenantId || null, type, String(title || '').slice(0, 200), message || null, relatedEntityType || null, relatedEntityId || null]
+    [userId, tenantId || null, type, String(title || '').slice(0, 200), message || null, relatedEntityType || null, relatedEntityId || null, kind.category, kind.priority, kind.persistent && !!relatedEntityId]
   );
-  // PWA: the same notification as a browser push (no-op without VAPID keys).
-  require('./push.service').notifyUser(userId, { type, title, message });
+  // Module 43: decide what also leaves the app (push, WhatsApp, SMS, email), now or in a digest.
+  intel.onCreated(result.rows[0], { alreadySent: alreadySent || [], scheduled: scheduled === true });
   return result.rows[0];
 }
 
 async function markRead(id, userId) {
   const result = await pool.query(
-    `UPDATE notifications SET is_read = true WHERE id = $1 AND user_id = $2 RETURNING *`,
+    `UPDATE notifications SET is_read = true, read_at = COALESCE(read_at, now()) WHERE id = $1 AND user_id = $2 RETURNING *`,
     [id, userId]
   );
   if (result.rows.length === 0) throw notFound();
@@ -66,7 +85,7 @@ async function markRead(id, userId) {
 
 async function markAllRead(userId) {
   const result = await pool.query(
-    `UPDATE notifications SET is_read = true WHERE user_id = $1 AND is_read = false RETURNING id`,
+    `UPDATE notifications SET is_read = true, read_at = now() WHERE user_id = $1 AND is_read = false RETURNING id`,
     [userId]
   );
   return { updated: result.rows.length };

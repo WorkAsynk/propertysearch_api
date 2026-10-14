@@ -551,6 +551,8 @@ async function acknowledge(id, user, meta = {}) {
     client.release();
   }
   afterStatusChange(m);
+  // Module 24: the free due diligence and valuation open as legal cases for the panel.
+  require('./legal.service').onMandateActivated(m).catch((err) => console.error('[mandate] legal case hook failed:', err.message));
   await notify([m.user_id], {
     type: 'mandate_active',
     title: `Your Exclusive Mandate ${m.mandate_number} is active`,

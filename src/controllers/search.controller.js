@@ -40,6 +40,7 @@ async function searchProperties(req, res, next) {
       lat: req.query.lat !== undefined && req.query.lat !== '' ? Number(req.query.lat) : undefined,
       lng: req.query.lng !== undefined && req.query.lng !== '' ? Number(req.query.lng) : undefined,
       radiusKm: req.query.radiusKm,
+      customFieldProbes: await require('../services/dynamicFields.service').searchProbes('property', req.query),
     };
 
     const result = await searchService.searchProperties(filters, page, limit, req.query.sort, {

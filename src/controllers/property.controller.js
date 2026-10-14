@@ -18,6 +18,7 @@ async function listProperties(req, res, next) {
       maxRate: req.query.maxRate,
       listingCategory: req.query.listingCategory,
       search: req.query.search,
+      customFieldProbes: await require('../services/dynamicFields.service').searchProbes('property', req.query),
     };
 
     const { items, pagination } = await propertyService.listProperties(

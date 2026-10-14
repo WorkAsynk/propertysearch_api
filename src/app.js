@@ -88,7 +88,8 @@ app.use(morgan('dev'));
 // Basic rate limiting on auth routes to prevent brute force / OTP abuse
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100,
+  // 100 by default. AUTH_RATE_LIMIT_MAX exists for the local e2e suite, which signs in more test users than that.
+  max: Number(process.env.AUTH_RATE_LIMIT_MAX) || 100,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Too many requests, please try again later.' },
@@ -164,8 +165,19 @@ app.use('/api/developer', developerRoutes);
 app.use('/api/exchange', exchangeRoutes);
 app.use('/api/wfh', wfhRoutes);
 app.use('/api/templates', templateRoutes);
+const franchiseRoutes = require('./routes/franchise.routes');
+app.use('/api/franchise', franchiseRoutes.adminRouter);
+app.use('/api/franchisee', franchiseRoutes.franchiseeRouter);
+app.use('/api/branding', franchiseRoutes.brandingRouter);
+app.use('/api/legal', require('./routes/legal.routes'));
+app.use('/api/finance', require('./routes/finance.routes'));
+app.use('/api/onboarding', require('./routes/onboarding.routes'));
+app.use('/api/cobroke', require('./routes/cobroke.routes'));
 app.use('/api/v1', publicApiRoutes);
 app.use('/api/market', marketRoutes);
+app.use('/api/market-digest', require('./routes/marketDigest.routes'));
+app.use('/api/fields', require('./routes/field.routes'));
+app.use('/api/coupons', require('./routes/coupon.routes'));
 app.use('/api/mandates', mandateRoutes);
 app.use('/api/representatives', representativeRoutes);
 app.use('/api/lead-sources', leadSourceRoutes);

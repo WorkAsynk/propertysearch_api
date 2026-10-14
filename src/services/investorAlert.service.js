@@ -185,6 +185,7 @@ async function dispatchDue() {
       message: `${property.title}${ticket ? ` - ${formatInr(ticket)}` : ''}${property.investment_score != null ? ` (score ${property.investment_score})` : ''}`,
       relatedEntityType: 'property',
       relatedEntityId: property.id,
+      alreadySent: template && (alert.alert_channels || []).includes('whatsapp') ? ['whatsapp'] : [],
     });
     const channels = ['in_app'];
     if ((alert.alert_channels || []).includes('whatsapp') && (await sendWhatsapp(alert, property, template))) channels.push('whatsapp');

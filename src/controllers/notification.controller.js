@@ -9,6 +9,10 @@ async function listNotifications(req, res, next) {
 
     const filters = {
       isRead: req.query.isRead !== undefined ? req.query.isRead === 'true' : undefined,
+      category: req.query.category || undefined,
+      priority: req.query.priority || undefined,
+      from: req.query.from || undefined,
+      to: req.query.to || undefined,
     };
 
     const { items, pagination } = await notificationService.listNotifications(

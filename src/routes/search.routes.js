@@ -185,6 +185,8 @@ router.get(
   '/properties/:id',
   [param('id').isUUID().withMessage('Invalid property id')],
   validate,
+  // Admin-added fields marked "show publicly" travel with the listing.
+  require('../services/dynamicFields.service').expose('property', { mode: 'public' }),
   searchController.getProperty
 );
 

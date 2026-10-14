@@ -28,7 +28,7 @@ const TERMINAL_STAGES = ['closed_won', 'closed_lost'];
 // returned to the frontend pipeline board is identical everywhere.
 const DEAL_SELECT = `
   SELECT d.*,
-         c.full_name AS customer_name, c.email AS customer_email, c.mobile AS customer_mobile,
+         c.full_name AS customer_name, c.email AS customer_email, c.mobile AS customer_mobile, c.user_id AS customer_user_id,
          p.title AS property_title, p.city AS property_city,
          un.unit_number AS unit_number,
          broker.full_name AS broker_name
@@ -156,6 +156,8 @@ async function createDeal(data, user) {
     await logStageChange(client, deal.id, null, deal.stage, user.id, 'Deal created');
 
     await client.query('COMMIT');
+    // Module 37: a deal on a listing two brokers agreed to co-broke is tied to that agreement.
+    require('./cobroke.service').safeOnDealCreated(deal);
     // Module 40: auto-trigger the next stages whose requirements are already
     // met (Lead -> Requirement -> Match when the requirement and property exist).
     const ev = await require('./orchestration.service').evaluate(deal.id, { actor: user }).catch(() => null);
@@ -263,7 +265,11 @@ async function changeStage(id, toStage, user, notes, { orchestrated = false, ove
     }
     // Trust score (sec. 8): a closed deal counts for the broker, the lister
     // and the customer.
+    // Module 37: the co-broking split is recorded when the linked deal closes.
+    if (TERMINAL_STAGES.includes(toStage)) require('./cobroke.service').safeOnDealClosed(id);
     if (toStage === 'closed_won') {
+      // Sec. 14.6: commission pool and split for a franchisee-territory deal.
+      require('./franchise.service').safeCalculate(id);
       const trust = require('./trust.service');
       trust.safeRecompute(deal.broker_id, 'deal_closed');
       const parties = await pool.query(

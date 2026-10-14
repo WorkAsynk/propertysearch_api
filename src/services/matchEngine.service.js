@@ -380,6 +380,8 @@ async function notifyHot(req, listing, row) {
         }) matches this listing. The A R Buildwel representative coordinates the buyer.`,
         relatedEntityType: 'requirement',
         relatedEntityId: req.id,
+        // sendHotWhatsapp below is this alert's WhatsApp message.
+        alreadySent: (await configService.getConfig('matching.hot_whatsapp_template', '')) ? ['whatsapp'] : [],
       });
       await sendHotWhatsapp(id, listing, row.score);
     }
@@ -1149,8 +1151,10 @@ function startScheduler() {
         lastNightly = date;
         await runNightly();
       }
+      // Module 43: the digest time comes from posting_windows; matching.digest_hour is the fallback.
+      const win = await require('./notificationIntel.service').windowFor('match_digest').catch(() => ({ configured: false }));
       const digestHour = Number(await configService.getConfig('matching.digest_hour', 9));
-      if (hour >= digestHour && lastDigest !== date) {
+      if ((win.configured ? win.open || win.passed : hour >= digestHour) && lastDigest !== date) {
         lastDigest = date;
         await sendDigests();
       }

@@ -8,6 +8,7 @@ const msg91 = require('./msg91.service');
 const { encrypt } = require('../utils/crypto');
 const { uploadBuffer, getReadUrl } = require('../utils/storage');
 const { badRequest, forbidden, notFound } = require('../utils/httpError');
+const fraud = require('./wfhFraud.service');
 
 // Module 47 - Work From Home (WFH) Citizen-Sourcing.
 //
@@ -24,6 +25,10 @@ const { badRequest, forbidden, notFound } = require('../utils/httpError');
 //             10 minutes, then the A R representative's confirmation
 //             (buyer visit) or a staff quality review (photo / report
 //             tasks).
+//   Fraud     layers added on top (wfhFraud.service): a 10-minute location
+//             track with motion analysis, photo fingerprints and reverse
+//             image search, declared family numbers, a risk score that
+//             holds doubtful submissions for a person, and teams.
 //   Money     the amount is fixed on the task when it is created. Verified
 //             earnings are paid monthly, less TDS once the yearly threshold
 //             is crossed; each payout has a slip.
@@ -109,6 +114,7 @@ const workerView = (w, staff = false) => ({
   latitude: num(w.latitude), longitude: num(w.longitude), aadhaarLast4: w.aadhaar_last4, hasPan: !!w.pan_hash, bankAccountLast4: w.bank_account_last4, bankIfsc: w.bank_ifsc, bankAccountName: w.bank_account_name,
   agreementVersion: w.agreement_version, agreementAcceptedAt: w.agreement_accepted_at, totalEarned: num(w.total_earned), totalPaidOut: num(w.total_paid_out), rejectionRate: num(w.rejection_rate), forfeitRate: num(w.forfeit_rate),
   acceptBlockedUntil: w.accept_blocked_until, createdAt: w.created_at, mobile: staff ? w.mobile : undefined, email: staff ? w.email : undefined, sharedDevice: staff ? w.shared_device : undefined,
+  familyDeclared: !!w.family_declared_at, riskScore: staff ? w.risk_score : undefined, familyMembers: staff ? w.family_members : undefined, teamName: staff ? w.team_name : undefined,
 });
 
 async function workerRow(userId) {
@@ -140,19 +146,21 @@ async function register(user, data, meta = {}) {
   const device = deviceHash(meta);
   await pool.query(
     `INSERT INTO wfh_workers (user_id, aadhaar_number_encrypted, aadhaar_hash, aadhaar_last4, pan_encrypted, pan_hash, bank_account_encrypted, bank_account_last4, bank_ifsc, bank_account_name,
-       agreement_version, agreement_accepted_at, agreement_ip, city, locality, latitude, longitude, device_hash)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), $12, $13, $14, $15, $16, $17)
+       agreement_version, agreement_accepted_at, agreement_ip, city, locality, latitude, longitude, device_hash, bank_hash)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), $12, $13, $14, $15, $16, $17, $18)
      ON CONFLICT (user_id) DO UPDATE SET aadhaar_number_encrypted = EXCLUDED.aadhaar_number_encrypted, aadhaar_hash = EXCLUDED.aadhaar_hash, aadhaar_last4 = EXCLUDED.aadhaar_last4, pan_encrypted = EXCLUDED.pan_encrypted,
        pan_hash = EXCLUDED.pan_hash, bank_account_encrypted = EXCLUDED.bank_account_encrypted, bank_account_last4 = EXCLUDED.bank_account_last4, bank_ifsc = EXCLUDED.bank_ifsc, bank_account_name = EXCLUDED.bank_account_name,
        agreement_version = EXCLUDED.agreement_version, agreement_accepted_at = now(), agreement_ip = EXCLUDED.agreement_ip, city = EXCLUDED.city, locality = EXCLUDED.locality, latitude = EXCLUDED.latitude,
-       longitude = EXCLUDED.longitude, device_hash = EXCLUDED.device_hash, kyc_status = 'pending', kyc_note = NULL, updated_at = now()`,
+       longitude = EXCLUDED.longitude, device_hash = EXCLUDED.device_hash, bank_hash = EXCLUDED.bank_hash, kyc_status = 'pending', kyc_note = NULL, updated_at = now()`,
     [user.id, encrypt(aadhaar), sha(aadhaar), aadhaar.slice(-4), pan ? encrypt(pan) : null, pan ? sha(pan) : null, encrypt(account), account.slice(-4), ifsc, data.bankAccountName ? String(data.bankAccountName).slice(0, 120) : null,
-      String(c.agreement_version || '1.0'), meta.ip || null, data.city ? String(data.city).slice(0, 120) : null, data.locality ? String(data.locality).slice(0, 160) : null, lat, lng, device]
+      String(c.agreement_version || '1.0'), meta.ip || null, data.city ? String(data.city).slice(0, 120) : null, data.locality ? String(data.locality).slice(0, 160) : null, lat, lng, device, sha(`bank|${account}|${ifsc}`)]
   );
   // Several field accounts from one device is a fraud signal for staff.
   if (device && (await pool.query('SELECT COUNT(*)::int AS n FROM wfh_workers WHERE device_hash = $1', [device])).rows[0].n > 1) {
     await pool.query(`INSERT INTO user_flags (user_id, reason, detail) VALUES ($1, 'wfh_shared_device', $2)`, [user.id, JSON.stringify({ note: 'Another field partner registered from the same device' })]);
   }
+  // Household numbers can be declared while joining, or afterwards (PUT /wfh/family).
+  if (Array.isArray(data.family) || data.noFamily === true) await fraud.setFamily(user, { members: data.family || [], none: data.noFamily === true }, meta);
   await auditService.log({ actor: user, action: 'wfh.registered', entityType: 'wfh_worker', entityId: user.id, after: { city: data.city, agreementVersion: c.agreement_version }, ...meta });
   return me(user);
 }
@@ -172,6 +180,7 @@ function blocker(w, c) {
   if (w.status !== 'active') return `Your field partner account is ${w.status}${w.status_note ? `: ${w.status_note}` : ''}`;
   if (w.kyc_status !== 'verified') return w.kyc_status === 'rejected' ? `KYC was not approved${w.kyc_note ? `: ${w.kyc_note}` : ''} - submit it again` : 'Your KYC is being verified - you can browse tasks meanwhile';
   if (w.agreement_version !== String(c.agreement_version || '1.0')) return 'Accept the updated Field Partner Agreement to continue';
+  if (c.family_declaration_required !== false && !w.family_declared_at) return 'Declare the mobile numbers of your household (or confirm there are none) before taking tasks';
   if (w.accept_blocked_until && new Date(w.accept_blocked_until) > new Date()) return `Task acceptance is paused until ${new Date(w.accept_blocked_until).toLocaleDateString('en-IN')} because too many accepted tasks were not completed`;
   return null;
 }
@@ -316,9 +325,12 @@ async function shapeAssignment(a, user) {
     otpRequired: !!TYPES[a.task_type].otp, otpConfirmed: a.buyer_otp_confirmed || a.seller_otp_confirmed, otpExpiresAt: a.otp_expires_at,
     confirmation: TYPES[a.task_type].confirm, repName: a.rep_name, repDueAt: a.rep_due_at, repConfirmed: a.rep_confirmed,
     workerName: staff ? a.worker_name : undefined, workerId: staff ? a.worker_id : undefined, fraudFlags: staff ? a.fraud_flags : undefined, leadId: staff ? a.lead_id : undefined,
+    riskScore: staff ? a.risk_score : undefined, riskBand: staff ? a.risk_band : undefined, riskReasons: staff ? a.risk_reasons : undefined, aiAssessment: staff ? a.ai_assessment : undefined, track: staff ? a.track_summary : undefined,
+    trackNeeded: !!TYPES[a.task_type].gps,
     waitingFor: a.state !== 'submitted' || a.verification_status !== 'pending' ? null
       : TYPES[a.task_type].otp && !(a.buyer_otp_confirmed || a.seller_otp_confirmed) ? 'otp'
-        : { rep: 'representative', review: 'review', listing: 'listing_live', auto: null }[TYPES[a.task_type].confirm],
+        : a.risk_band === 'high' && TYPES[a.task_type].confirm !== 'rep' ? 'review'
+          : { rep: 'representative', review: 'review', listing: 'listing_live', auto: null }[TYPES[a.task_type].confirm],
   };
 }
 
@@ -367,13 +379,19 @@ async function processPhotos(a, files, c, radius) {
     else if (Date.now() - new Date(info.exif.takenAt).getTime() > maxAge || new Date(info.exif.takenAt).getTime() > Date.now() + 3600000) problems.push('not taken in the last 24 hours');
     // The same picture already on a listing means it was not taken for this task.
     if (info.phash !== null && info.phash !== undefined && (await pool.query('SELECT 1 FROM property_media WHERE phash = $1 LIMIT 1', [info.phash]).catch(() => ({ rows: [] }))).rows.length) problems.push('this photo is already on the platform');
-    out.push({ file: f, path: null, lat: info.exif.lat, lng: info.exif.lng, takenAt: info.exif.takenAt, distanceM: d, phash: info.phash === null || info.phash === undefined ? null : String(info.phash), problems });
+    // Photos from the internet (Google Maps, a portal, a screenshot) are refused outright.
+    const origin = problems.length ? { found: false, checked: [] } : await fraud.internetCheck(f, c);
+    if (origin.found) problems.push(`this photo was found on the internet${origin.where ? ` (${String(origin.where).slice(0, 80)})` : ''}`);
+    out.push({ file: f, path: null, lat: info.exif.lat, lng: info.exif.lng, takenAt: info.exif.takenAt, distanceM: d, phash: info.phash === null || info.phash === undefined ? null : String(info.phash), problems,
+      camera: [info.exif.make, info.exif.model].filter(Boolean).join(' ') || null, software: info.exif.software || null, originChecked: origin.checked });
   }
+  // The same picture on another task, or twice here.
+  await fraud.fingerprintProblems(a, out, c);
   return out;
 }
 
 // Rules about the buyer's / seller's phone number. Throws when the task must be refused; returns flags otherwise.
-async function checkPartyPhone(a, phone, worker, c) {
+async function checkPartyPhone(a, phone, worker, c, partyName) {
   const flags = [];
   if (phoneOf(worker.mobile) === phone) throw badRequest('You cannot submit your own mobile number');
   const hash = sha(phone);
@@ -382,11 +400,13 @@ async function checkPartyPhone(a, phone, worker, c) {
     [hash, a.id, String(n(c, 'phone_dedupe_days', 90))]
   );
   if (dup.rows.length) throw badRequest(`This person has already been submitted for a task in the last ${n(c, 'phone_dedupe_days', 90)} days - the first submission counts`);
-  const person = (await pool.query(`SELECT u.id, u.created_at, u.mobile_verified FROM users u WHERE right(regexp_replace(COALESCE(u.mobile, ''), '\\D', '', 'g'), 10) = $1 LIMIT 1`, [phone])).rows[0];
+  const person = (await pool.query(`SELECT u.id, u.full_name, u.created_at, u.mobile_verified FROM users u WHERE right(regexp_replace(COALESCE(u.mobile, ''), '\\D', '', 'g'), 10) = $1 LIMIT 1`, [phone])).rows[0];
   if (person) {
     if (person.id === worker.user_id) throw badRequest('You cannot submit your own account');
     if (Date.now() - new Date(person.created_at).getTime() < n(c, 'new_account_hours', 24) * 3600000) throw badRequest('This person\'s account is too new - try again after 24 hours');
   }
+  // Family, Aadhaar-linked relatives, a shared bank account and team-mates.
+  flags.push(...(await fraud.familyCheck(worker, phone, person, partyName)));
   const month = (await pool.query(`SELECT COUNT(*)::int AS n FROM wfh_task_assignments WHERE party_phone_hash = $1 AND submitted_at > now() - interval '30 days'`, [hash])).rows[0].n;
   if (month + 1 >= n(c, 'phone_repeat_flag_count', 3)) flags.push({ rule: 'phone_repeat', detail: `Same mobile in ${month + 1} tasks this month` });
   return { hash, flags };
@@ -406,6 +426,7 @@ async function submit(user, id, body, files = [], meta = {}) {
   const type = TYPES[a.task_type];
   const flags = [];
   let gps = { lat: null, lng: null, d: null };
+  let track = null;
 
   if (type.gps) {
     const lat = Number(body.latitude);
@@ -414,6 +435,13 @@ async function submit(user, id, body, files = [], meta = {}) {
     gps = { lat, lng, d: distance(lat, lng, a.task_lat, a.task_lng) };
     const limit = n(c, 'gps_visit_radius_m', 100);
     if (gps.d === null || gps.d > limit) throw badRequest(`You are ${gps.d} m from the property - check in within ${limit} m`);
+    // The location track: 10 minutes at the property, with a believable pattern of movement.
+    track = fraud.analyseTrack(await fraud.trackOf(id), { lat: a.task_lat, lng: a.task_lng }, c);
+    if (!track.ok && c.track_enforced === true) {
+      throw badRequest(`Stay at the property with this page open for ${track.need} minutes before submitting (${track.minutes} so far). ${track.issues.map((k) => fraud.TRACK_ISSUES[k]).join('. ')}.`);
+    }
+    flags.push(...track.issues.map((k) => ({ rule: `track_${k}`, detail: fraud.TRACK_ISSUES[k] })));
+    if (Number(body.accuracy) > 100) flags.push({ rule: 'poor_gps_accuracy', detail: `Check-in accuracy ${Math.round(Number(body.accuracy))} m` });
   }
 
   let photos = [];
@@ -438,6 +466,10 @@ async function submit(user, id, body, files = [], meta = {}) {
     else ph.path = await uploadBuffer(f.buffer, `wfh/${a.id}`, f.originalname, f.mimetype);
   }
   photos = photos.filter((ph) => ph.path);
+  if (photos.length) {
+    if (photos.some((ph) => ph.software && /photoshop|snapseed|lightroom|gimp|canva|picsart|screenshot/i.test(ph.software))) flags.push({ rule: 'photo_edited', detail: 'A photo was saved by an editing program' });
+    else if (photos.every((ph) => !ph.camera)) flags.push({ rule: 'photo_no_camera', detail: 'The photos carry no camera make or model' });
+  }
 
   let phone = null;
   let party = { hash: null, flags: [] };
@@ -445,7 +477,7 @@ async function submit(user, id, body, files = [], meta = {}) {
     phone = phoneOf(body.partyPhone);
     if (!phone || !/^[6-9]\d{9}$/.test(phone)) throw badRequest(`Enter the ${type.party}'s 10-digit mobile number`);
     if (!body.partyName || String(body.partyName).trim().length < 2) throw badRequest(`Enter the ${type.party}'s name`);
-    party = await checkPartyPhone(a, phone, worker, c);
+    party = await checkPartyPhone(a, phone, worker, c, body.partyName);
     flags.push(...party.flags);
   }
 
@@ -480,12 +512,15 @@ async function submit(user, id, body, files = [], meta = {}) {
 
   await pool.query(
     `UPDATE wfh_task_assignments SET state = 'submitted', submitted_at = now(), gps_lat = $1, gps_lng = $2, gps_distance_from_property_m = $3, photo_urls = $4, evidence = $5,
-       buyer_phone_submitted = $6, seller_phone_submitted = $7, party_phone_hash = $8, party_phone_last4 = $9, party_name = $10, fraud_flags = $11 WHERE id = $12`,
+       buyer_phone_submitted = $6, seller_phone_submitted = $7, party_phone_hash = $8, party_phone_last4 = $9, party_name = $10, fraud_flags = $11, track_summary = $13 WHERE id = $12`,
     [gps.lat, gps.lng, gps.d, JSON.stringify(photos), JSON.stringify(evidence), type.party === 'buyer' && phone ? encrypt(phone) : null, type.party === 'seller' && phone ? encrypt(phone) : null,
-      party.hash, phone ? phone.slice(-4) : null, body.partyName ? String(body.partyName).trim().slice(0, 150) : null, JSON.stringify(flags), id]
+      party.hash, phone ? phone.slice(-4) : null, body.partyName ? String(body.partyName).trim().slice(0, 150) : null, JSON.stringify(flags), id, track ? JSON.stringify(track) : null]
   );
   await pool.query(`UPDATE wfh_tasks SET status = 'completed' WHERE id = $1`, [a.task_id]);
-  await auditService.log({ actor: user, action: 'wfh.task_submitted', entityType: 'wfh_assignment', entityId: id, after: { type: a.task_type, gpsDistance: gps.d, photos: photos.length, flags: flags.length }, ...meta });
+  await fraud.storeHashes(id, user.id, photos);
+  // Fraud risk score from every signal above; a high score is held for a person.
+  const risk = await fraud.assess(id, worker, flags, c);
+  await auditService.log({ actor: user, action: 'wfh.task_submitted', entityType: 'wfh_assignment', entityId: id, after: { type: a.task_type, gpsDistance: gps.d, photos: photos.length, flags: flags.length, riskScore: risk.score, riskBand: risk.band }, ...meta });
   let debugOtp;
   if (type.otp) debugOtp = await sendOtp(a, phone, c);
   else await advance(id);
@@ -524,7 +559,8 @@ async function advance(id) {
   const c = await cfg();
   const a = await loadAssignment(id);
   const how = TYPES[a.task_type].confirm;
-  if (how === 'auto') return pass(id, null);
+  // Nothing with a high fraud risk score is paid without a person looking at it.
+  if (how === 'auto') return a.risk_band === 'high' ? null : pass(id, null);
   if (how === 'rep') {
     // The representative on the property's enquiries, else the least busy one.
     const rep = (await pool.query(
@@ -667,8 +703,9 @@ async function listSubmissions(staff, { queue = 'pending' } = {}) {
     pending: `a.state = 'submitted' AND a.verification_status = 'pending'`,
     mine: `a.state = 'submitted' AND a.verification_status = 'pending' AND a.rep_id = $1`,
     passed: `a.verification_status = 'passed'`, failed: `a.verification_status = 'failed'`, flagged: `jsonb_array_length(a.fraud_flags) > 0`,
+    risk: `a.state = 'submitted' AND a.verification_status = 'pending' AND a.risk_band = 'high'`,
   }[queue] || `a.state = 'submitted' AND a.verification_status = 'pending'`;
-  const r = await pool.query(`${ASSIGNMENT_SELECT} WHERE ${where} ORDER BY a.submitted_at DESC NULLS LAST LIMIT 200`, queue === 'mine' ? [staff.id] : []);
+  const r = await pool.query(`${ASSIGNMENT_SELECT} WHERE ${where} ORDER BY ${queue === 'risk' ? 'a.risk_score DESC, ' : ''}a.submitted_at DESC NULLS LAST LIMIT 200`, queue === 'mine' ? [staff.id] : []);
   const out = [];
   for (const a of r.rows) out.push(await shapeAssignment(a, staff));
   return out;
@@ -683,7 +720,9 @@ async function listWorkers({ kyc, status } = {}) {
   if (status) { params.push(status); where.push(`w.status = $${params.length}`); }
   const r = await pool.query(
     `SELECT w.*, u.full_name, u.mobile, u.email, (SELECT COUNT(*) > 1 FROM wfh_workers x WHERE x.device_hash = w.device_hash AND w.device_hash IS NOT NULL) AS shared_device,
-            (SELECT COUNT(*)::int FROM wfh_task_assignments a WHERE a.worker_id = w.user_id AND a.verification_status = 'passed') AS verified_tasks
+            (SELECT COUNT(*)::int FROM wfh_task_assignments a WHERE a.worker_id = w.user_id AND a.verification_status = 'passed') AS verified_tasks,
+            (SELECT COUNT(*)::int FROM wfh_worker_family f WHERE f.worker_id = w.user_id) AS family_members,
+            (SELECT t.name FROM wfh_team_members m JOIN wfh_teams t ON t.id = m.team_id WHERE m.worker_id = w.user_id) AS team_name
      FROM wfh_workers w JOIN users u ON u.id = w.user_id ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY (w.kyc_status = 'pending') DESC, w.created_at DESC LIMIT 300`, params);
   return r.rows.map((w) => ({ ...workerView(w, true), verifiedTasks: w.verified_tasks }));
 }
@@ -771,7 +810,13 @@ async function me(user) {
       'You are an independent field partner, not an employee of A R Buildwel, and are responsible for your own income tax. TDS is deducted where the law requires.', 'Never submit your own number or a family member\'s, and never share a buyer\'s or owner\'s details with anyone else.'],
   };
   if (!w) return { ...base, joined: false };
-  return { ...base, joined: true, worker: workerView(w), blocker: blocker(w, c), performance: await performance(user.id) };
+  const household = await fraud.family(user.id);
+  return {
+    ...base, joined: true, worker: workerView(w), blocker: blocker(w, c), performance: await performance(user.id),
+    family: { declared: household.declared, members: household.members.length, required: c.family_declaration_required !== false },
+    team: (await fraud.myTeam(user)).team,
+    track: { minutes: n(c, 'track_minutes', 10), enforced: c.track_enforced === true },
+  };
 }
 
 // Monthly payout run: one payout per worker whose verified, unpaid earnings reach the minimum.
@@ -905,7 +950,7 @@ async function sweep() {
   // Listing assist: paid when the listing is live and has passed L1 verification.
   const assists = (await pool.query(
     `SELECT a.id, p.status::text AS status, p.verification_level FROM wfh_task_assignments a JOIN wfh_tasks t ON t.id = a.task_id JOIN properties p ON p.id = (a.evidence->>'listingId')::uuid
-     WHERE t.task_type = 'listing_assist' AND a.state = 'submitted' AND a.verification_status = 'pending' AND a.seller_otp_confirmed`
+     WHERE t.task_type = 'listing_assist' AND a.state = 'submitted' AND a.verification_status = 'pending' AND a.seller_otp_confirmed AND COALESCE(a.risk_band, 'low') <> 'high'`
   )).rows;
   let assistsPaid = 0;
   for (const a of assists) {
@@ -938,7 +983,8 @@ async function summary() {
   const [w, t, a, e] = await Promise.all([
     pool.query(`SELECT COUNT(*)::int AS workers, COUNT(*) FILTER (WHERE kyc_status = 'pending')::int AS kyc_pending, COUNT(*) FILTER (WHERE kyc_status = 'verified' AND status = 'active')::int AS active FROM wfh_workers`),
     pool.query(`SELECT COUNT(*) FILTER (WHERE status = 'open' AND expiry_at > now())::int AS open, COUNT(*) FILTER (WHERE status = 'locked')::int AS locked, COUNT(*) FILTER (WHERE status = 'verified')::int AS verified FROM wfh_tasks`),
-    pool.query(`SELECT COUNT(*) FILTER (WHERE state = 'submitted' AND verification_status = 'pending')::int AS to_review, COUNT(*) FILTER (WHERE state = 'submitted' AND verification_status = 'pending' AND rep_due_at < now() AND rep_confirmed IS NULL)::int AS overdue FROM wfh_task_assignments`),
+    pool.query(`SELECT COUNT(*) FILTER (WHERE state = 'submitted' AND verification_status = 'pending')::int AS to_review, COUNT(*) FILTER (WHERE state = 'submitted' AND verification_status = 'pending' AND rep_due_at < now() AND rep_confirmed IS NULL)::int AS overdue,
+            COUNT(*) FILTER (WHERE state = 'submitted' AND verification_status = 'pending' AND risk_band = 'high')::int AS high_risk FROM wfh_task_assignments`),
     pool.query(`SELECT COALESCE(SUM(gross_amount) FILTER (WHERE status = 'credited' AND payout_id IS NULL), 0)::float AS unpaid, COALESCE(SUM(gross_amount) FILTER (WHERE created_at >= date_trunc('month', now())), 0)::float AS month FROM wfh_earnings`),
   ]);
   const pend = (await pool.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(net_amount), 0)::float AS amount FROM wfh_payouts WHERE status = 'pending'`)).rows[0];
@@ -955,6 +1001,7 @@ function startScheduler() {
 const phoneHash = (phone) => (phoneOf(phone) ? sha(phoneOf(phone)) : null);
 
 module.exports = {
+  cfg, helpers: { sha, phoneOf, workerRow },
   TYPES, phoneHash, distance, amountFor, getConfig, updateConfig, register, updateLocation, me, board, accept, myTasks, assignmentView, submit, resendOtp, confirmOtp,
   createTask, cancelTask, listTasks, repDecide, review, listSubmissions, listWorkers, decideKyc, setWorkerStatus, earnings, performance,
   runPayouts, listPayouts, payoutBankDetails, markPaid, payoutSlip, sweep, summary, startScheduler,

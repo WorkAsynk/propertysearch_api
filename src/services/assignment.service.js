@@ -287,7 +287,13 @@ async function route(leadId, { reason = 'new' } = {}) {
   // The rep who just missed (or left) is never handed it straight back - their
   // 'missed' event is only written in place(), after this choice.
   if ((reason === 'exit' || reason === 'missed') && lead.arb_rep_id) exclude.push(lead.arb_rep_id);
-  const pick = await choose(hop, ctx, exclude, lead.assignment_route);
+  // Sec. 14: the territory step runs before the cascade - the owning
+  // franchisee's own team first, then its Franchisee Manager on a miss.
+  const territoryPick = await require('./franchise.service').pickFor(lead, ctx, { reason, exclude }).catch((err) => {
+    console.error('[assignment] territory step failed:', err.message);
+    return null;
+  });
+  const pick = territoryPick || (await choose(hop, ctx, exclude, lead.assignment_route));
   if (!pick.userId) return null; // no representative configured at all - picked up by the sweep later
   if (reason === 'exit') hop = Math.max(1, hop);
   return place(lead, ctx, c, pick, hop, reason === 'new' ? null : lead.arb_rep_id, reason);

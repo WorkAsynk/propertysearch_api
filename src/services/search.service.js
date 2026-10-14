@@ -250,6 +250,12 @@ function buildWhere(filters, settings = { typo: 0.35, radiusKm: 5, maxRadiusKm: 
     }
   }
 
+  // Dynamic Field Manager: filters on admin-added fields marked searchable (?cf_<name>=value).
+  for (const probe of filters.customFieldProbes || []) {
+    params.push(probe);
+    where.push(require('./dynamicFields.service').searchSql('property', 'properties', params.length));
+  }
+
   return { where, params, extra };
 }
 

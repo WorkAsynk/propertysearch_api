@@ -7,6 +7,7 @@ const { authenticate } = require('../middlewares/auth');
 const { uploadDocumentFile } = require('../middlewares/upload');
 
 const router = express.Router();
+const fields = require('../services/dynamicFields.service');
 router.use(authenticate);
 
 const PROPERTY_TYPES = ['apartment', 'villa', 'independent_house', 'plot', 'commercial', 'farmhouse', 'other'];
@@ -159,6 +160,7 @@ router.post(
     body('priceRange').optional({ nullable: true }).isObject(),
   ],
   validate,
+  fields.capture('requirement', { create: true }),
   portal.createRequirement
 );
 
@@ -188,6 +190,7 @@ router.put(
     body('longitude').optional({ nullable: true }).isFloat({ min: -180, max: 180 }),
   ],
   validate,
+  fields.capture('requirement'),
   portal.updateRequirement
 );
 
@@ -469,7 +472,7 @@ const listingValidators = (creating) => [
  *     responses: { 201: { description: Listing (pending approval) + its mandate record } }
  */
 router.get('/listings', portal.listListings);
-router.post('/listings', listingValidators(true), validate, portal.createListing);
+router.post('/listings', listingValidators(true), validate, fields.capture('property', { create: true }), portal.createListing);
 
 /**
  * @swagger
@@ -481,7 +484,7 @@ router.post('/listings', listingValidators(true), validate, portal.createListing
  *     parameters: [{ in: path, name: id, required: true, schema: { type: string, format: uuid } }]
  *     responses: { 200: { description: Listing } }
  */
-router.put('/listings/:id', [...idParam, ...listingValidators(false)], validate, portal.updateListing);
+router.put('/listings/:id', [...idParam, ...listingValidators(false)], validate, fields.capture('property'), portal.updateListing);
 
 /**
  * @swagger

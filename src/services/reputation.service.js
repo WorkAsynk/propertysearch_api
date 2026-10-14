@@ -52,6 +52,8 @@ async function rawEdges() {
      UNION ALL
      SELECT d.broker_id, p.created_by, 'closed_deal' FROM deals d JOIN properties p ON p.id = d.property_id WHERE d.stage = 'closed_won'
      UNION ALL
+     SELECT proposer_id, partner_id, CASE WHEN status = 'completed' THEN 'closed_deal' ELSE 'co_listing' END FROM cobroke_agreements WHERE status IN ('accepted', 'deal_open', 'completed')
+     UNION ALL
      SELECT voucher_id, vouchee_id, 'vouch' FROM broker_vouches WHERE revoked_at IS NULL`
   );
   return r.rows.filter((e) => e.a && e.b && e.a !== e.b);

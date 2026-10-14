@@ -844,9 +844,9 @@ async function pendingEnquiries() {
 }
 
 // Outbound prospecting: who to approach, from the platform's own activity.
-// (Lender / advocate / insurer partner records arrive with the Phase 2
-// partner ecosystem; until then the signals are listing volume and the
-// demand for loan, insurance and legal help in each city.)
+// Signals: listing volume, the demand for loan, insurance and legal help in
+// each city, and the lenders / insurers already receiving referrals from the
+// platform (Modules 25 / 26) who are not advertising yet.
 async function suggestions() {
   const existing = new Set((await pool.query('SELECT lower(business_name) AS n FROM advertisers')).rows.map((r) => r.n));
   const firms = await pool.query(
@@ -865,9 +865,11 @@ async function suggestions() {
      WHERE c.status = 'approved' AND c.end_date >= CURRENT_DATE`
   );
   const covered = new Set(advertisingIn.rows.map((r) => `${r.business_category}|${r.city}`));
+  const partners = await require('./finance.service').referralVolume().catch(() => []);
   const want = { home_loan: ['bank', 'nbfc'], insurance: ['insurance'], legal: ['legal_services'] };
   const label = { home_loan: 'Banks and NBFCs', insurance: 'Insurers', legal: 'Law firms / legal services' };
   return {
+    partners: partners.filter((p) => !existing.has(String(p.name).toLowerCase())).map((p) => ({ institutionId: p.id, business: p.name, type: p.kind === 'insurer' ? 'Insurer' : 'Bank / NBFC', city: p.city, activity: p.referrals, reason: `${p.referrals} referrals from the platform in ${p.city} in 90 days - not advertising yet` })),
     firms: firms.rows.filter((f) => !existing.has(String(f.business).toLowerCase())).map((f) => ({ userId: f.id, business: f.business, type: f.role === 'builder' ? 'Builder / developer' : 'Broker firm', city: f.city, activity: f.listings, reason: `${f.listings} live listings in ${f.city} and not advertising` })),
     categories: demand.rows.filter((d) => !want[d.enquiry_type].some((cat) => covered.has(`${cat}|${String(d.city).toLowerCase()}`))).map((d) => ({ city: d.city, approach: label[d.enquiry_type], activity: d.enquiries, reason: `${d.enquiries} ${d.enquiry_type.replace('_', ' ')} enquiries in ${d.city} in 90 days and no advertiser of this kind there` })),
   };
@@ -908,7 +910,7 @@ async function uploadCreative(user, file) {
 module.exports = {
   PLACEMENTS, SLOT_SIZE, LISTING_PLACEMENTS,
   approveAdvertiser, listAdvertisers, updateAdvertiser, pendingEnquiries, eligibleCategories,
-  rateCard, saveRate, quote,
+  rateCard, saveRate, quote, markPaid,
   createCampaign, updateCampaign, setCampaignState, reviewCampaign, campaignView, listCampaigns, portalHome,
   listInvoices, invoicePdf, createRazorpayOrder, verifyRazorpayPayment, recordPayment,
   serve, click, sponsoredLabel, digestSponsor, revenue, suggestions, sweep, startScheduler, uploadCreative,

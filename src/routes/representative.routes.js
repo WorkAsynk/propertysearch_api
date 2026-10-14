@@ -91,7 +91,7 @@ router.put(
   authorize(...ADMIN),
   [
     param('userId').isUUID(),
-    body('designation').optional().isIn(['rm', 'dm', 'tl', 'tc']),
+    body('designation').optional().isIn(['rm', 'dm', 'tl', 'tc', 'fm', 'ld', 'id']),
     body('platformNumber').optional({ nullable: true }).isString().isLength({ max: 20 }),
     body('assignedStates').optional().isArray({ max: 40 }),
     body('assignedCities').optional().isArray({ max: 200 }),

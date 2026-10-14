@@ -48,6 +48,17 @@ app.listen(PORT, () => {
   if (process.env.SEARCH_JOBS_DISABLED !== 'true') require('./services/search.service').startScheduler();
   // Module 47: WFH task locks, expiry, representative escalation, listing-assist payment (every 15 minutes).
   if (process.env.WFH_JOBS_DISABLED !== 'true') require('./services/wfh.service').startScheduler();
+  // Module 34: nudge brokers and builders who stall in onboarding (every 6 hours).
+  if (process.env.ONBOARDING_JOBS_DISABLED !== 'true') require('./services/onboarding.service').startScheduler();
+  // Module 43: delivery queue (retries, held batches), digests and persistent alerts.
+  if (process.env.NOTIFICATION_JOBS_DISABLED !== 'true') require('./services/notificationIntel.service').startScheduler();
+  // Daily market digest for brokers (sec. 20.4): compiled and sent in its posting windows.
+  if (process.env.MARKET_DIGEST_JOBS_DISABLED !== 'true') require('./services/marketDigest.service').startScheduler();
+  // Engine 8: expired scheme coupons are switched off (never deleted), hourly.
+  setInterval(() => require('./services/coupon.service').sweep().catch((err) => console.error('[coupons] sweep failed:', err.message)), 60 * 60 * 1000).unref();
+  // Sec. 14.7 franchisee payment ladder and suspension levels (hourly). The suspension cache loads either way.
+  if (process.env.FRANCHISE_JOBS_DISABLED !== 'true') require('./services/franchise.service').startScheduler();
+  else require('./services/franchise.service').refreshSuspensionCache().catch(() => {});
   // Module 35: webhook event scanner and delivery (every minute).
   if (process.env.WEBHOOK_JOBS_DISABLED !== 'true') require('./services/webhook.service').startScheduler();
   // Modules 32 / 33: hourly compliance checks; DPDP deletion requests whose 30-day notice has ended.

@@ -1,5 +1,6 @@
 const express = require('express');
 const { body, param, query } = require('express-validator');
+const fields = require('../services/dynamicFields.service');
 const router = express.Router();
 
 const propertyController = require('../controllers/property.controller');
@@ -208,6 +209,7 @@ router.get(
   authenticate,
   [param('id').isUUID().withMessage('Invalid property id')],
   validate,
+  fields.expose('property'),
   propertyController.getProperty
 );
 
@@ -245,6 +247,7 @@ router.post(
     body('price').notEmpty().withMessage('Price is required').isString().isLength({ max: 100 }),
     body('city').notEmpty().withMessage('City is required'),
     body('locality').optional().isString(),
+    body('pincode').optional({ nullable: true }).matches(/^\d{6}$/).withMessage('Pincode must be 6 digits'),
     body('address').optional().isString(),
     body('latitude').optional().isFloat(),
     body('longitude').optional().isFloat(),
@@ -257,6 +260,7 @@ router.post(
     ...OPPORTUNITY_FIELD_VALIDATORS,
   ],
   validate,
+  fields.capture('property', { create: true }),
   propertyController.createProperty
 );
 
@@ -304,6 +308,7 @@ router.put(
     ...OPPORTUNITY_FIELD_VALIDATORS,
   ],
   validate,
+  fields.capture('property'),
   propertyController.updateProperty
 );
 

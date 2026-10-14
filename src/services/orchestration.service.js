@@ -208,7 +208,7 @@ async function createInvoice(deal, kind, party, triggerDate, c) {
     kind === 'instalment_2' ? c.note
     : kind === 'lease' ? 'Professional fee for the lease / leave-and-licence: one month\'s gross rent.'
     : 'Instalment 1 of the professional fee, raised on execution of the Agreement to Sell.';
-  const inv = (
+  let inv = (
     await pool.query(
       `INSERT INTO invoices (invoice_number, deal_id, kind, party, liable_customer_id, liable_user_id, liable_name, gross_value, fee_rate_percent,
          instalment_percent, fee_amount, gst_type, cgst_amount, sgst_amount, igst_amount, total_amount, gstin, note, trigger_date, due_date, sent_channels)
@@ -218,6 +218,8 @@ async function createInvoice(deal, kind, party, triggerDate, c) {
         cgst, sgst, igst, r2(fee + cgst + sgst + igst), c.gstin, note, triggerDate, c.dueDays, JSON.stringify(['in_app'])]
     )
   ).rows[0];
+  // Engine 8: a scheme coupon saved on the deal comes off this invoice (never below the 1% minimum).
+  inv = await require('./coupon.service').safeOnFeeInvoice(inv);
   if (party === 'buyer' || party === 'tenant') {
     const col = { instalment_1: 'instalment_1_invoice_id', instalment_2: 'instalment_2_invoice_id', lease: 'lease_invoice_id' }[kind];
     await pool.query(`UPDATE deals SET ${col} = $1 WHERE id = $2`, [inv.id, deal.id]);

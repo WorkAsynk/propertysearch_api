@@ -11,6 +11,7 @@ const valuation = require('../services/institutionalValuation.service');
 
 // Engine 7 - Institutional. Mounted at /api/institutional.
 
+const fields = require('../services/dynamicFields.service');
 const router = express.Router();
 const STAFF = ['internal_sales', 'admin', 'super_admin'];
 const meta = (req) => auditService.requestMeta(req);
@@ -95,9 +96,9 @@ const listingRules = (create) => [
   body('infrastructure').optional({ nullable: true }).isString().isLength({ max: 4000 }),
   body('isConfidential').optional().isBoolean(),
 ];
-router.post('/listings', authenticate, listingRules(true), validate, h(async (req, res) => ok(res, 'Institutional listing saved', await institutional.createListing(req.user, req.body, meta(req)), 201)));
-router.get('/listings/:id', optionalAuthenticate, idp, validate, h(async (req, res) => ok(res, 'Institutional listing', await institutional.getListing(req.user || null, req.params.id))));
-router.put('/listings/:id', authenticate, idp, listingRules(false), validate, h(async (req, res) => ok(res, 'Institutional listing updated', await institutional.updateListing(req.user, req.params.id, req.body, meta(req)))));
+router.post('/listings', authenticate, listingRules(true), validate, fields.capture('institution', { create: true, idFrom: (d) => d?.propertyId || d?.property_id || d?.id }), h(async (req, res) => ok(res, 'Institutional listing saved', await institutional.createListing(req.user, req.body, meta(req)), 201)));
+router.get('/listings/:id', optionalAuthenticate, idp, validate, fields.expose('institution', { idFrom: (d, req) => req.params.id, fullWhen: (d) => d.access?.full }), h(async (req, res) => ok(res, 'Institutional listing', await institutional.getListing(req.user || null, req.params.id))));
+router.put('/listings/:id', authenticate, idp, listingRules(false), validate, fields.capture('institution'), h(async (req, res) => ok(res, 'Institutional listing updated', await institutional.updateListing(req.user, req.params.id, req.body, meta(req)))));
 
 /**
  * @swagger

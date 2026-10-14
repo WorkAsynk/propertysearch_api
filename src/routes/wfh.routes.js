@@ -7,6 +7,7 @@ const asyncHandler = require('../utils/asyncHandler');
 const { success } = require('../utils/response');
 const auditService = require('../services/audit.service');
 const wfh = require('../services/wfh.service');
+const fraud = require('../services/wfhFraud.service');
 
 // Module 47 - Work From Home (WFH) Citizen-Sourcing. Mounted at /api/wfh.
 
@@ -105,6 +106,123 @@ router.get('/assignments/:id', idp, validate, h(async (req, res) => ok(res, 'Tas
 router.post('/assignments/:id/submit', uploadPropertyMedia.array('photos', 12), idp, validate, h(async (req, res) => ok(res, 'Evidence submitted', await wfh.submit(req.user, req.params.id, req.body, req.files || [], meta(req)))));
 router.post('/assignments/:id/otp', [...idp, body('otp').isString().isLength({ min: 4, max: 8 })], validate, h(async (req, res) => ok(res, 'OTP confirmed', await wfh.confirmOtp(req.user, req.params.id, req.body.otp))));
 router.post('/assignments/:id/otp/resend', idp, validate, h(async (req, res) => ok(res, 'OTP sent', await wfh.resendOtp(req.user, req.params.id))));
+/**
+ * @swagger
+ * /wfh/assignments/{id}/track:
+ *   post:
+ *     summary: Position reports from the phone while the worker is at the property (10-minute location track)
+ *     tags: [WFH]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [points]
+ *             properties:
+ *               points:
+ *                 type: array
+ *                 maxItems: 30
+ *                 items:
+ *                   type: object
+ *                   required: [latitude, longitude]
+ *                   properties:
+ *                     latitude: { type: number }
+ *                     longitude: { type: number }
+ *                     accuracy: { type: number }
+ *                     at: { type: string, format: date-time }
+ *                     mocked: { type: boolean }
+ *     responses:
+ *       200: { description: Progress of the track - samples, minutes at the property, minutes needed }
+ */
+router.post('/assignments/:id/track', [...idp, body('points').isArray({ min: 1, max: 30 })], validate, h(async (req, res) => ok(res, 'Location recorded', await fraud.recordTrack(req.user, req.params.id, req.body.points))));
+
+/**
+ * @swagger
+ * /wfh/family:
+ *   get:
+ *     summary: The household members this field partner has declared (numbers are shown as last four digits)
+ *     tags: [WFH]
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: Declared family }
+ *   put:
+ *     summary: Declare household members. Numbers can be added later, never removed.
+ *     tags: [WFH]
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               none: { type: boolean, description: Confirms there is nobody to declare }
+ *               members:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   required: [relation, mobile]
+ *                   properties:
+ *                     relation: { type: string, enum: [spouse, parent, child, sibling, in_law, other] }
+ *                     name: { type: string }
+ *                     mobile: { type: string }
+ *                     aadhaar: { type: string }
+ *     responses:
+ *       200: { description: Declared family }
+ */
+router.get('/family', h(async (req, res) => ok(res, 'Family', await fraud.family(req.user.id))));
+router.put('/family', h(async (req, res) => ok(res, 'Family saved', await fraud.setFamily(req.user, req.body || {}, meta(req)))));
+
+/**
+ * @swagger
+ * /wfh/team:
+ *   get:
+ *     summary: The field partner's team - members, verified tasks and rank
+ *     tags: [WFH]
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: Team (null when not in one) }
+ *   post:
+ *     summary: Start a team (KYC-verified field partners)
+ *     tags: [WFH]
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema: { type: object, required: [name], properties: { name: { type: string } } }
+ *     responses:
+ *       201: { description: Team }
+ * /wfh/team/join:
+ *   post:
+ *     summary: Join a team with its code
+ *     tags: [WFH]
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema: { type: object, required: [code], properties: { code: { type: string } } }
+ *     responses:
+ *       200: { description: Team }
+ * /wfh/team/leave:
+ *   post:
+ *     summary: Leave the team
+ *     tags: [WFH]
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: Done }
+ */
+router.get('/team', h(async (req, res) => ok(res, 'Team', await fraud.myTeam(req.user))));
+router.post('/team', [body('name').isString().isLength({ min: 3, max: 60 })], validate, h(async (req, res) => ok(res, 'Team created', await fraud.createTeam(req.user, req.body, meta(req)), 201)));
+router.post('/team/join', [body('code').isString().isLength({ min: 4, max: 12 })], validate, h(async (req, res) => ok(res, 'Joined the team', await fraud.joinTeam(req.user, req.body, meta(req)))));
+router.post('/team/leave', h(async (req, res) => ok(res, 'Left the team', await fraud.leaveTeam(req.user, meta(req)))));
+router.delete('/team/members/:id', idp, validate, h(async (req, res) => ok(res, 'Member removed', await fraud.removeMember(req.user, req.params.id, meta(req)))));
+
 router.get('/earnings', h(async (req, res) => ok(res, 'Earnings', await wfh.earnings(req.user))));
 router.get(
   '/payouts/:id/slip',
@@ -117,6 +235,10 @@ router.get(
 );
 
 // ----- A R staff
+// Module 47 fraud layers: what the checks found in the last 30 days, the teams, and a worker's declared family.
+router.get('/manage/fraud', authorize(...STAFF), h(async (req, res) => ok(res, 'Fraud checks', await fraud.fraudOverview())));
+router.get('/manage/teams', authorize(...STAFF), h(async (req, res) => ok(res, 'Teams', await fraud.listTeams())));
+router.get('/manage/workers/:id/family', authorize(...STAFF), idp, validate, h(async (req, res) => ok(res, 'Declared family', await fraud.family(req.params.id))));
 router.get('/manage/summary', authorize(...STAFF), h(async (req, res) => ok(res, 'Field network summary', await wfh.summary())));
 router.get('/manage/tasks', authorize(...STAFF), h(async (req, res) => ok(res, 'Tasks', await wfh.listTasks(req.query))));
 router.post('/manage/tasks', authorize(...STAFF), [body('taskType').isIn(Object.keys(wfh.TYPES)), body('propertyId').optional({ checkFalsy: true }).isUUID(), body('count').optional().isInt({ min: 1, max: 50 })], validate, h(async (req, res) => ok(res, 'Task created', await wfh.createTask(req.user, req.body, meta(req)), 201)));

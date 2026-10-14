@@ -42,6 +42,11 @@ function applyTenantScope(user, where, params) {
   where.push(
     `(l.tenant_id = $${params.length - 2} OR l.created_by = $${params.length - 1} OR l.assigned_to = $${params.length} OR l.arb_rep_id = $${params.length})`
   );
+  // Sec. 14.7: an inquiry taken back from a suspended franchisee is no longer
+  // visible to that franchisee's own users.
+  where.push(
+    `(l.can_broker_see OR l.franchisee_id IS NULL OR NOT EXISTS (SELECT 1 FROM franchisees fr WHERE fr.id = l.franchisee_id AND fr.tenant_id = $${params.length - 2}))`
+  );
 }
 
 // Every status/assignment change (and creation) writes an activity_log row
@@ -211,6 +216,12 @@ async function createPublicInquiry(data) {
     if (data.anonymousId) events.identify({ anonymousId: data.anonymousId, customerId: customer.id }).catch(() => {});
     await sendAcknowledgement(lead.id, null);
     if (propertyId) require('./matchEngine.service').recordEvent({ customerId: customer.id, propertyId, event: 'enquired' });
+    // Module 24: a legal enquiry opens a legal case with the documents on file linked.
+    await require('./legal.service').onLegalEnquiry(lead, message).catch((err) => console.error('[lead] legal case hook failed:', err.message));
+    // Modules 25 / 26: a home-loan or insurance enquiry opens its case for the desk.
+    const finance = require('./finance.service');
+    await finance.onLoanEnquiry(lead).catch((err) => console.error('[lead] loan hook failed:', err.message));
+    await finance.onInsuranceEnquiry(lead).catch((err) => console.error('[lead] insurance hook failed:', err.message));
     const out = await getLeadById(lead.id);
     // Engine 7: an enquiry on an institutional asset is Stage 1 (Intent Received).
     if (propertyId && !data.skipInstitutionalHook) {
@@ -242,6 +253,7 @@ async function updateLead(id, data) {
     }
   }
 
+  if (set.length === 0 && data.customFields !== undefined) return getLeadById(id);
   if (set.length === 0) throw badRequest('No updatable fields provided');
 
   params.push(id);
